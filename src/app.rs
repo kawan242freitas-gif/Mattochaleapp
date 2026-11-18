@@ -102,9 +102,7 @@ impl MattoApp {
             selected_product: None,
             textures: HashMap::new(),
             icons: icons::load(&cc.egui_ctx),
-            brand_texture: image::load_from_memory(include_bytes!(
-                "../../assets/matto-chales-cabana.png"
-            ))
+            brand_texture: image::load_from_memory(include_bytes!("../assets/brand-mark.png"))
             .ok()
             .map(|image| {
                 let image = image.to_rgba8();
