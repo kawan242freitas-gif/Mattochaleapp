@@ -153,6 +153,7 @@ pub struct DashboardApp {
     launcher_adega_texture: Option<TextureHandle>,
     launcher_reservas_button: Option<TextureHandle>,
     launcher_adega_button: Option<TextureHandle>,
+    launcher_update_button: Option<TextureHandle>,
     brand_texture: Option<TextureHandle>,
     icons: HashMap<Icon, TextureHandle>,
     tx: Sender<Event>,
@@ -216,6 +217,11 @@ impl DashboardApp {
             "launcher-open-cellar",
             include_bytes!("../assets/abrir-adega.png"),
         );
+        let launcher_update_button = load_texture(
+            &cc.egui_ctx,
+            "launcher-update-pending",
+            include_bytes!("../assets/atualizacao-pendente.png"),
+        );
         let launcher_reservas_texture = load_texture(
             &cc.egui_ctx,
             "launcher-reservas-background",
@@ -256,6 +262,7 @@ impl DashboardApp {
             launcher_adega_texture,
             launcher_reservas_button,
             launcher_adega_button,
+            launcher_update_button,
             brand_texture,
             icons: icons::load(&cc.egui_ctx),
             tx,
@@ -743,7 +750,8 @@ impl DashboardApp {
                 let button_pos = Pos2::new(copy_left, subtitle_pos.y + 62.0);
                 let is_reservas = self.launcher_module == Section::Reservas;
                 let update_mode = self.update_available.is_some() || self.update_busy;
-                let has_image_button = !update_mode && (is_reservas || self.launcher_module == Section::Adega);
+                let has_image_button = (!self.update_busy && self.update_available.is_some())
+                    || (!update_mode && (is_reservas || self.launcher_module == Section::Adega));
                 let button_label = if self.update_busy { format!("BAIXANDO {}%", self.update_progress) }
                     else if let Some(update) = &self.update_available { format!("ATUALIZAR PARA {}", update.version) }
                     else { button_text.to_owned() };
@@ -754,7 +762,9 @@ impl DashboardApp {
                 };
                 let button_rect = Rect::from_min_size(button_pos, button_size);
                 let button = if has_image_button {
-                    let image_button = if is_reservas {
+                    let image_button = if update_mode {
+                        self.launcher_update_button.as_ref()
+                    } else if is_reservas {
                         self.launcher_reservas_button.as_ref()
                     } else {
                         self.launcher_adega_button.as_ref()
