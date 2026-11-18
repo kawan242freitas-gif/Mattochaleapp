@@ -520,7 +520,7 @@ impl DashboardApp {
                             Pos2::new(rect.center().x, rect.center().y),
                             Vec2::new(profile_width, 34.0),
                         );
-                        let painter = ui.painter();
+                        let painter = ui.painter().clone();
                         painter.rect_filled(capsule, 17.0, Color32::from_rgb(38, 24, 16));
                         painter.rect_stroke(
                             capsule,
