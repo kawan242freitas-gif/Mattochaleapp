@@ -43,9 +43,24 @@ pub fn download(info: &UpdateInfo, mut progress: impl FnMut(u8)) -> Result<PathB
         if total > 0 { progress(((received.saturating_mul(100) / total).min(100)) as u8); }
     }
     file.sync_all()?;
-    let output = Command::new("powershell.exe").args(["-NoProfile", "-Command", "(Get-FileHash -LiteralPath $args[0] -Algorithm SHA256).Hash"]).arg(&path).output()?;
-    if !output.status.success() { let _ = std::fs::remove_file(&path); bail!("Não foi possível verificar o SHA-256 do instalador"); }
-    let actual = String::from_utf8_lossy(&output.stdout).trim().to_ascii_lowercase();
+    let output = Command::new("certutil.exe")
+        .arg("-hashfile")
+        .arg(&path)
+        .arg("SHA256")
+        .output()?;
+    if !output.status.success() {
+        let _ = std::fs::remove_file(&path);
+        bail!("Não foi possível verificar o SHA-256 do instalador");
+    }
+    let actual = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .find(|line| line.len() == 64 && line.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .map(str::to_ascii_lowercase);
+    let Some(actual) = actual else {
+        let _ = std::fs::remove_file(&path);
+        bail!("A saída do Windows não contém um SHA-256 válido");
+    };
     if actual != info.sha256 { let _ = std::fs::remove_file(&path); bail!("O hash do instalador não corresponde ao publicado no GitHub"); }
     Ok(path)
 }
