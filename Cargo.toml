@@ -1,0 +1,24 @@
+[package]
+name = "matto-chales-desktop"
+version = "0.1.0"
+edition = "2024"
+description = "Aplicativo desktop nativo da Matto Chalés"
+
+[dependencies]
+anyhow = "1"
+base64 = "0.22"
+directories = "6"
+eframe = { version = "0.37", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
+image = { version = "0.25", default-features = false, features = ["gif", "jpeg", "png", "webp"] }
+open = "5"
+reqwest = { version = "0.12", features = ["json", "multipart", "blocking"] }
+resvg = "0.49.0"
+rfd = "0.15"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+urlencoding = "2"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
