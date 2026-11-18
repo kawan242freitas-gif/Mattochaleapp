@@ -466,12 +466,20 @@ impl DashboardApp {
                                 .fit_to_exact_size(Vec2::splat(brand_size)),
                         );
                     }
-                    ui.label(
-                        RichText::new(&self.preferences.store_name)
-                            .size(18.0)
-                            .strong()
-                            .color(title_color),
-                    );
+                    ui.vertical(|ui| {
+                        ui.spacing_mut().item_spacing.y = 0.0;
+                        ui.label(
+                            RichText::new(&self.preferences.store_name)
+                                .size(18.0)
+                                .strong()
+                                .color(title_color),
+                        );
+                        ui.label(
+                            RichText::new(format!("v{}", env!("CARGO_PKG_VERSION")))
+                                .size(11.0)
+                                .color(MUTED),
+                        );
+                    });
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if self.window_control(ui, Icon::X, "Fechar") {
                             if self.section == Section::Launcher {
