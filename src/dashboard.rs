@@ -512,20 +512,48 @@ impl DashboardApp {
                             ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
                         }
                         if !launcher && !self.profile_name.trim().is_empty() {
-                            ui.add_space(10.0);
-                            if let Some(frame) = self.profile_frames.get(self.profile_frame_index) {
-                                ui.add(
-                                    egui::Image::new((frame.texture.id(), Vec2::splat(26.0)))
-                                        .fit_to_exact_size(Vec2::splat(26.0)),
-                                );
-                            }
-                            ui.label(
-                                RichText::new(&self.profile_name)
-                                    .size(12.0)
-                                    .strong()
-                                    .color(INK),
-                            );
-                            ui.add_space(12.0);
+                            ui.add_space(8.0);
+                            Frame::new()
+                                .fill(Color32::from_rgb(38, 24, 16))
+                                .stroke(Stroke::new(1.0, Color32::from_rgb(76, 49, 31)))
+                                .corner_radius(22.0)
+                                .inner_margin(Margin::symmetric(10, 4))
+                                .show(ui, |ui| {
+                                    ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                                        ui.spacing_mut().item_spacing.x = 8.0;
+                                        if let Some(frame) = self.profile_frames.get(self.profile_frame_index) {
+                                            ui.add(
+                                                egui::Image::new((frame.texture.id(), Vec2::splat(26.0)))
+                                                    .fit_to_exact_size(Vec2::splat(26.0))
+                                                    .corner_radius(13.0),
+                                            );
+                                        } else {
+                                            let (avatar_rect, _) = ui.allocate_exact_size(
+                                                Vec2::splat(26.0),
+                                                Sense::hover(),
+                                            );
+                                            ui.painter().circle_filled(
+                                                avatar_rect.center(),
+                                                13.0,
+                                                Color32::from_rgb(62, 46, 33),
+                                            );
+                                            icons::paint_in_rect(
+                                                ui,
+                                                &self.icons,
+                                                Icon::UserRound,
+                                                avatar_rect.shrink(6.0),
+                                                INK,
+                                            );
+                                        }
+                                        ui.label(
+                                            RichText::new(&self.profile_name)
+                                                .size(12.0)
+                                                .strong()
+                                                .color(INK),
+                                        );
+                                    });
+                                });
+                            ui.add_space(8.0);
                         }
                     });
                 });
