@@ -466,27 +466,33 @@ impl DashboardApp {
                 }
 
                 ui.horizontal_centered(|ui| {
+                    let brand_size = if launcher { 40.0 } else { 28.0 };
                     if let Some(brand) = &self.brand_texture {
-                        let brand_size = if launcher { 40.0 } else { 28.0 };
                         ui.add(
                             egui::Image::new((brand.id(), Vec2::splat(brand_size)))
                                 .fit_to_exact_size(Vec2::splat(brand_size)),
                         );
                     }
-                    ui.vertical(|ui| {
-                        ui.spacing_mut().item_spacing.y = 0.0;
-                        ui.label(
-                            RichText::new(&self.preferences.store_name)
-                                .size(18.0)
-                                .strong()
-                                .color(title_color),
-                        );
-                        ui.label(
-                            RichText::new(format!("v{}", env!("CARGO_PKG_VERSION")))
-                                .size(11.0)
-                                .color(MUTED),
-                        );
-                    });
+                    ui.allocate_ui_with_layout(
+                        Vec2::new(220.0, brand_size),
+                        Layout::left_to_right(Align::Center),
+                        |ui| {
+                            ui.vertical(|ui| {
+                                ui.spacing_mut().item_spacing.y = 0.0;
+                                ui.label(
+                                    RichText::new(&self.preferences.store_name)
+                                        .size(if launcher { 16.0 } else { 13.0 })
+                                        .strong()
+                                        .color(title_color),
+                                );
+                                ui.label(
+                                    RichText::new(format!("v{}", env!("CARGO_PKG_VERSION")))
+                                        .size(if launcher { 10.0 } else { 9.0 })
+                                        .color(MUTED),
+                                );
+                            });
+                        },
+                    );
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if self.window_control(ui, Icon::X, "Fechar") {
                             if self.section == Section::Launcher {
