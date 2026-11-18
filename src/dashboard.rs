@@ -18,6 +18,7 @@ use crate::{
     api,
     icons::{self, Icon},
     model::{CategoryFilter, Product},
+    updater::{self, UpdateInfo},
 };
 
 const CANVAS: Color32 = Color32::from_rgb(25, 16, 11);
@@ -109,6 +110,9 @@ enum Event {
     ProductSaved(Result<Product, String>),
     ProductDeleted(Result<String, String>),
     ProductImageUploaded(Result<String, String>),
+    UpdateChecked(Result<Option<UpdateInfo>, String>),
+    UpdateProgress(u8),
+    UpdateDownloaded(Result<(PathBuf, String), String>),
 }
 
 #[derive(Default)]
@@ -174,6 +178,10 @@ pub struct DashboardApp {
     image_upload_busy: bool,
     admin_category: CategoryFilter,
     last_context: egui::Context,
+    update_available: Option<UpdateInfo>,
+    update_busy: bool,
+    update_progress: u8,
+    update_message: Option<String>,
 }
 
 impl DashboardApp {
@@ -273,9 +281,40 @@ impl DashboardApp {
             image_upload_busy: false,
             admin_category: CategoryFilter::Todos,
             last_context: cc.egui_ctx.clone(),
+            update_available: None,
+            update_busy: false,
+            update_progress: 0,
+            update_message: None,
         };
         app.request_products(cc.egui_ctx.clone());
+        app.request_update_check(cc.egui_ctx.clone());
         app
+    }
+
+    fn request_update_check(&self, ctx: egui::Context) {
+        let tx = self.tx.clone();
+        thread::spawn(move || {
+            let result = updater::latest().map_err(|e| e.to_string());
+            let _ = tx.send(Event::UpdateChecked(result));
+            ctx.request_repaint();
+        });
+    }
+
+    fn start_update_download(&mut self, ctx: egui::Context) {
+        let Some(update) = self.update_available.clone() else { return; };
+        self.update_busy = true;
+        self.update_progress = 0;
+        self.update_message = Some(format!("Baixando atualização {}…", update.version));
+        let tx = self.tx.clone();
+        thread::spawn(move || {
+            let version = update.version.clone();
+            let result = updater::download(&update, |percent| {
+                let _ = tx.send(Event::UpdateProgress(percent));
+                ctx.request_repaint();
+            }).map(|path| (path, version)).map_err(|e| e.to_string());
+            let _ = tx.send(Event::UpdateDownloaded(result));
+            ctx.request_repaint();
+        });
     }
 
     fn request_products(&self, ctx: egui::Context) {
@@ -298,6 +337,23 @@ impl DashboardApp {
                     }
                     self.products = products;
                 }
+                Event::UpdateChecked(Ok(update)) => { self.update_available = update; }
+                Event::UpdateChecked(Err(error)) => { self.update_message = Some(format!("Não foi possível verificar atualizações: {error}")); }
+                Event::UpdateProgress(percent) => { self.update_progress = percent; }
+                Event::UpdateDownloaded(Ok((path, version))) => {
+                    self.update_progress = 100;
+                    self.update_message = Some("Aplicando atualização…".to_owned());
+                    let launched = std::process::Command::new(path)
+                        .arg("--apply-update")
+                        .arg(std::process::id().to_string())
+                        .arg(version)
+                        .spawn();
+                    match launched {
+                        Ok(_) => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+                        Err(error) => { self.update_busy = false; self.update_message = Some(format!("Falha ao iniciar a atualização: {error}")); }
+                    }
+                }
+                Event::UpdateDownloaded(Err(error)) => { self.update_busy = false; self.update_message = Some(format!("Falha ao baixar atualização: {error}")); }
                 Event::Products(Err(error)) => {
                     self.products_loading = false;
                     self.product_error = Some(error);
@@ -678,11 +734,15 @@ impl DashboardApp {
                 );
                 let button_pos = Pos2::new(copy_left, subtitle_pos.y + 62.0);
                 let is_reservas = self.launcher_module == Section::Reservas;
-                let has_image_button = is_reservas || self.launcher_module == Section::Adega;
+                let update_mode = self.update_available.is_some() || self.update_busy;
+                let has_image_button = !update_mode && (is_reservas || self.launcher_module == Section::Adega);
+                let button_label = if self.update_busy { format!("BAIXANDO {}%", self.update_progress) }
+                    else if let Some(update) = &self.update_available { format!("ATUALIZAR PARA {}", update.version) }
+                    else { button_text.to_owned() };
                 let button_size = if has_image_button {
                     Vec2::new(480.0, 110.0)
                 } else {
-                    Vec2::new(374.0, 82.0)
+                    Vec2::new(if update_mode { 480.0 } else { 374.0 }, 82.0)
                 };
                 let button_rect = Rect::from_min_size(button_pos, button_size);
                 let button = if has_image_button {
@@ -701,7 +761,7 @@ impl DashboardApp {
                     } else {
                         ui.put(
                             button_rect,
-                            egui::Button::new(RichText::new(button_text).size(24.0).strong())
+                            egui::Button::new(RichText::new(&button_label).size(24.0).strong())
                                 .fill(ACCENT)
                                 .corner_radius(9),
                         )
@@ -710,7 +770,7 @@ impl DashboardApp {
                     let response = ui.put(
                         button_rect,
                         egui::Button::new(
-                            RichText::new(button_text)
+                            RichText::new(&button_label)
                                 .size(24.0)
                                 .strong()
                                 .color(Color32::from_rgb(30, 24, 20)),
@@ -730,7 +790,19 @@ impl DashboardApp {
                     );
                     response
                 };
-                if button.clicked() {
+                if update_mode {
+                    if let Some(message) = &self.update_message {
+                        painter.text(Pos2::new(button_rect.left(), button_rect.bottom() + 18.0), Align2::LEFT_TOP, message, FontId::proportional(15.0), TEXT);
+                    }
+                    if self.update_busy {
+                        let bar = Rect::from_min_size(Pos2::new(button_rect.left(), button_rect.bottom() + 42.0), Vec2::new(button_rect.width(), 12.0));
+                        painter.rect_filled(bar, 6.0, Color32::from_rgb(49, 31, 20));
+                        painter.rect_filled(Rect::from_min_size(bar.min, Vec2::new(bar.width() * self.update_progress as f32 / 100.0, bar.height())), 6.0, ACCENT);
+                    }
+                }
+                if button.clicked() && update_mode && !self.update_busy {
+                    self.start_update_download(ui.ctx().clone());
+                } else if button.clicked() {
                     open_module = Some(self.launcher_module);
                 }
                 if let Some(section) = open_module {

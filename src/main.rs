@@ -7,6 +7,7 @@ mod dashboard;
 mod icons;
 #[allow(dead_code)]
 mod model;
+mod updater;
 
 fn main() -> eframe::Result {
     let app_icon = image::load_from_memory(include_bytes!("../assets/app-icon.png"))

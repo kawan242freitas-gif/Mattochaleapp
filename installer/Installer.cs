@@ -13,16 +13,21 @@ using System.Windows.Forms;
 internal static class Installer
 {
     private const string AppName = "Matto Chal\u00E9s";
-    private const string AppVersion = "0.1.41";
+    private const string AppVersion = "0.1.42";
     private static readonly string LocalAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
     private static readonly string InstallDir = Path.Combine(LocalAppData, "Programs", "Matto Chales");
     private static readonly string ConfigDir = Path.Combine(LocalAppData, "Matto Chales", "Matto Chales", "config");
 
     [STAThread]
-    private static void Main()
+    private static void Main(string[] args)
     {
         try
         {
+            if (args.Length > 0 && args[0] == "--apply-update")
+            {
+                ApplyUpdate(args);
+                return;
+            }
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
             Application.Run(new SetupWindow());
@@ -33,6 +38,40 @@ internal static class Installer
             try { File.WriteAllText(log, error.ToString()); } catch { }
             MessageBox.Show("O instalador encontrou um erro ao iniciar.\n\n" + error.Message +
                 "\n\nDetalhes: " + log, AppName, MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
+    private static void ApplyUpdate(string[] args)
+    {
+        int processId;
+        if (args.Length < 2 || !Int32.TryParse(args[1], out processId))
+            throw new ArgumentException("Parâmetros de atualização inválidos.");
+        try { Process.GetProcessById(processId).WaitForExit(30000); } catch (ArgumentException) { }
+        Directory.CreateDirectory(InstallDir);
+        string appPath = Path.Combine(InstallDir, "MattoChales.exe");
+        string tempPath = appPath + ".update";
+        string backupPath = appPath + ".previous";
+        using (Stream input = Assembly.GetExecutingAssembly().GetManifestResourceStream("MattoChales.exe"))
+        {
+            if (input == null) throw new InvalidOperationException("O executável atualizado não está no pacote.");
+            using (var output = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None)) input.CopyTo(output);
+        }
+        try
+        {
+            if (File.Exists(backupPath)) File.Delete(backupPath);
+            if (File.Exists(appPath)) File.Move(appPath, backupPath);
+            File.Move(tempPath, appPath);
+        }
+        catch
+        {
+            if (!File.Exists(appPath) && File.Exists(backupPath)) File.Move(backupPath, appPath);
+            throw;
+        }
+        try { Process.Start(appPath); }
+        catch
+        {
+            if (File.Exists(backupPath)) { File.Delete(appPath); File.Move(backupPath, appPath); }
+            throw;
         }
     }
 

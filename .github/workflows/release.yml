@@ -1,0 +1,53 @@
+name: Build and publish desktop release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Versão sem prefixo v (ex.: 0.1.43)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  windows-release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Set release version
+        shell: pwsh
+        run: |
+          $version = if ('${{ github.event_name }}' -eq 'workflow_dispatch') { '${{ inputs.version }}' } else { '${{ github.ref_name }}'.TrimStart('v') }
+          if ($version -notmatch '^\d+\.\d+\.\d+$') { throw "Versão inválida: $version" }
+          "MATTO_VERSION=$version" >> $env:GITHUB_ENV
+          $cargo = Get-Content Cargo.toml -Raw
+          $cargo = [regex]::Replace($cargo, '(?m)^version = "[^"]+"', "version = `"$version`"", 1)
+          Set-Content Cargo.toml $cargo -NoNewline
+          $installer = Get-Content installer\Installer.cs -Raw
+          $installer = [regex]::Replace($installer, 'AppVersion = "[^"]+"', "AppVersion = `"$version`"")
+          Set-Content installer\Installer.cs $installer -NoNewline
+      - name: Build app and installer
+        shell: pwsh
+        run: |
+          cargo build --release --target-dir target-dashboard
+          ./installer/build-installer.ps1
+      - name: Create update manifest
+        shell: pwsh
+        run: |
+          $installer = "MattoChales-Setup-$env:MATTO_VERSION.exe"
+          $hash = (Get-FileHash "dist/$installer" -Algorithm SHA256).Hash.ToLowerInvariant()
+          $manifest = @{ version = $env:MATTO_VERSION; installer = $installer; sha256 = $hash } | ConvertTo-Json
+          Set-Content dist/latest.json $manifest -Encoding utf8
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          $tag = "v$env:MATTO_VERSION"
+          gh release create $tag "dist/MattoChales-Setup-$env:MATTO_VERSION.exe" dist/latest.json --repo $env:GITHUB_REPOSITORY --title "Matto Chalés $tag" --generate-notes

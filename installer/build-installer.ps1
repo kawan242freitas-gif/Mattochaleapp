@@ -4,7 +4,8 @@ $installerDir = $PSScriptRoot
 $desktopDir = Split-Path -Parent $installerDir
 $sourceExe = Join-Path $desktopDir 'target-dashboard\release\matto-chales-desktop.exe'
 $outputDir = Join-Path $desktopDir 'dist'
-$outputExe = Join-Path $outputDir 'MattoChales-Setup-0.1.41.exe'
+$version = if ($env:MATTO_VERSION) { $env:MATTO_VERSION } else { '0.1.42' }
+$outputExe = Join-Path $outputDir "MattoChales-Setup-$version.exe"
 $workDir = Join-Path $installerDir 'build'
 $csc = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
 $iconPath = Join-Path $desktopDir 'assets\matto-chales.ico'
@@ -20,21 +21,19 @@ if (Test-Path -LiteralPath $outputExe) { Remove-Item -LiteralPath $outputExe -Fo
 
 $arguments = @(
     '/nologo', '/target:winexe', '/platform:anycpu', '/optimize+', '/codepage:65001',
-    '/out:desktop-rust\dist\MattoChales-Setup-0.1.41.exe',
-    '/win32icon:desktop-rust\assets\matto-chales.ico',
+    "/out:$outputExe",
+    "/win32icon:$iconPath",
     '/reference:System.dll',
     '/reference:System.Drawing.dll',
     '/reference:System.Windows.Forms.dll',
     '/reference:Microsoft.CSharp.dll',
-    '/resource:desktop-rust\target-dashboard\release\matto-chales-desktop.exe,MattoChales.exe',
-    '/resource:desktop-rust\assets\installer-wallpaper.jpg,InstallerWallpaper.jpg',
-    '/resource:desktop-rust\assets\app-icon.png,ChaletMark.png',
-    '/resource:desktop-rust\assets\matto-chales.ico,MattoChales.ico',
-    'desktop-rust\installer\Installer.cs'
+    "/resource:$sourceExe,MattoChales.exe",
+    "/resource:$(Join-Path $desktopDir 'assets\installer-wallpaper.jpg'),InstallerWallpaper.jpg",
+    "/resource:$(Join-Path $desktopDir 'assets\app-icon.png'),ChaletMark.png",
+    "/resource:$iconPath,MattoChales.ico",
+    (Join-Path $installerDir 'Installer.cs')
 )
-Push-Location (Split-Path -Parent $desktopDir)
 & $csc @arguments
-Pop-Location
 if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $outputExe)) {
     throw "A compilacao do instalador falhou. Codigo: $LASTEXITCODE"
 }
