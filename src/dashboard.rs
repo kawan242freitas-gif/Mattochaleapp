@@ -511,7 +511,7 @@ impl DashboardApp {
                         if self.window_control(ui, Icon::Minus, "Minimizar") {
                             ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
                         }
-                        if !launcher && !self.profile_name.trim().is_empty() {
+                        if !self.profile_name.trim().is_empty() {
                             ui.add_space(8.0);
                             Frame::new()
                                 .fill(Color32::from_rgb(38, 24, 16))
