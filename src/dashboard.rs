@@ -658,9 +658,9 @@ impl DashboardApp {
 
                 let rail_collapsed = rail_width < 112.0;
                 let profile_size = if rail_collapsed { 38.0 } else { 34.0 };
-                // Mantém aproximadamente 2 cm de respiro entre o avatar e a cápsula dos módulos.
+                // Mantém o avatar próximo, mas separado, da cápsula dos módulos.
                 let profile_capsule = Rect::from_center_size(
-                    Pos2::new(rail_rect.center().x, rail_rect.center().y - 97.0),
+                    Pos2::new(rail_rect.center().x, rail_rect.center().y - 28.0),
                     Vec2::new(if rail_collapsed { 56.0 } else { rail_width - 20.0 }, 56.0),
                 );
                 let profile_center = Pos2::new(
