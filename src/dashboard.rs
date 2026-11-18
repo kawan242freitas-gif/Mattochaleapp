@@ -756,9 +756,9 @@ impl DashboardApp {
                 let button_pos = Pos2::new(copy_left, subtitle_pos.y + 62.0);
                 let is_reservas = self.launcher_module == Section::Reservas;
                 let update_mode = self.update_available.is_some() || self.update_busy;
-                let has_image_button = (!self.update_busy && self.update_available.is_some())
-                    || (!update_mode && (is_reservas || self.launcher_module == Section::Adega));
-                let button_label = if self.update_busy { format!("BAIXANDO {}%", self.update_progress) }
+                let has_image_button = update_mode
+                    || (is_reservas || self.launcher_module == Section::Adega);
+                let button_label = if self.update_busy { "ATUALIZAÇÃO PENDENTE".to_owned() }
                     else if let Some(update) = &self.update_available { format!("ATUALIZAR PARA {}", update.version) }
                     else { button_text.to_owned() };
                 let button_size = if has_image_button {
@@ -780,7 +780,11 @@ impl DashboardApp {
                             button_rect,
                             egui::Image::new((texture.id(), button_size))
                                 .fit_to_exact_size(button_size)
-                                .sense(Sense::click()),
+                                .sense(if self.update_busy {
+                                    Sense::hover()
+                                } else {
+                                    Sense::click()
+                                }),
                         )
                     } else {
                         ui.put(
@@ -815,19 +819,31 @@ impl DashboardApp {
                     response
                 };
                 if update_mode {
-                    if let Some(message) = &self.update_message {
-                        painter.text(Pos2::new(button_rect.left(), button_rect.bottom() + 18.0), Align2::LEFT_TOP, message, FontId::proportional(15.0), TEXT);
+                    if !self.update_busy {
+                        if let Some(message) = &self.update_message {
+                            painter.text(
+                                Pos2::new(button_rect.left(), button_rect.bottom() + 18.0),
+                                Align2::LEFT_TOP,
+                                message,
+                                FontId::proportional(15.0),
+                                TEXT,
+                            );
+                        }
                     }
                     if self.update_busy {
-                        let bar = Rect::from_min_size(Pos2::new(button_rect.left(), button_rect.bottom() + 42.0), Vec2::new(button_rect.width(), 12.0));
+                        let bar = Rect::from_min_size(Pos2::new(button_rect.left(), button_rect.bottom() + 20.0), Vec2::new(button_rect.width(), 12.0));
                         painter.rect_filled(bar, 6.0, Color32::from_rgb(49, 31, 20));
                         painter.rect_filled(Rect::from_min_size(bar.min, Vec2::new(bar.width() * self.update_progress as f32 / 100.0, bar.height())), 6.0, ACCENT);
                     }
                 }
-                if button.clicked() && update_mode && !self.update_busy {
-                    self.start_update_download(ui.ctx().clone());
-                } else if button.clicked() {
-                    open_module = Some(self.launcher_module);
+                if button.clicked() {
+                    if update_mode {
+                        if !self.update_busy {
+                            self.start_update_download(ui.ctx().clone());
+                        }
+                    } else {
+                        open_module = Some(self.launcher_module);
+                    }
                 }
                 if let Some(section) = open_module {
                     self.section = section;
