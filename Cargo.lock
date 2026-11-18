@@ -1898,6 +1898,7 @@ dependencies = [
  "eframe",
  "image",
  "open",
+ "ring",
  "reqwest",
  "resvg",
  "rfd",

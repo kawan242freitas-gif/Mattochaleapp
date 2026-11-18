@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
-use std::{fs::File, io::{Read, Write}, path::PathBuf, process::Command};
+use std::{fs::File, io::{Read, Write}, path::{Path, PathBuf}};
 
 pub const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 const RELEASE_API: &str = "https://api.github.com/repos/kawan242freitas-gif/Mattochaleapp/releases/latest";
@@ -43,24 +43,36 @@ pub fn download(info: &UpdateInfo, mut progress: impl FnMut(u8)) -> Result<PathB
         if total > 0 { progress(((received.saturating_mul(100) / total).min(100)) as u8); }
     }
     file.sync_all()?;
-    let output = Command::new("certutil.exe")
-        .arg("-hashfile")
-        .arg(&path)
-        .arg("SHA256")
-        .output()?;
-    if !output.status.success() {
-        let _ = std::fs::remove_file(&path);
-        bail!("Não foi possível verificar o SHA-256 do instalador");
-    }
-    let actual = String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .map(str::trim)
-        .find(|line| line.len() == 64 && line.bytes().all(|byte| byte.is_ascii_hexdigit()))
-        .map(str::to_ascii_lowercase);
-    let Some(actual) = actual else {
-        let _ = std::fs::remove_file(&path);
-        bail!("A saída do Windows não contém um SHA-256 válido");
+    drop(file);
+    let actual = match sha256_file(&path) {
+        Ok(hash) => hash,
+        Err(error) => {
+            let _ = std::fs::remove_file(&path);
+            return Err(error).context("Não foi possível verificar o SHA-256 do instalador");
+        }
     };
-    if actual != info.sha256 { let _ = std::fs::remove_file(&path); bail!("O hash do instalador não corresponde ao publicado no GitHub"); }
+    if actual != info.sha256 {
+        let _ = std::fs::remove_file(&path);
+        bail!("O hash do instalador não corresponde ao publicado no GitHub");
+    }
     Ok(path)
+}
+
+fn sha256_file(path: &Path) -> Result<String> {
+    let mut file = File::open(path)?;
+    let mut context = ring::digest::Context::new(&ring::digest::SHA256);
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let count = file.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        context.update(&buffer[..count]);
+    }
+    Ok(context
+        .finish()
+        .as_ref()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect())
 }
