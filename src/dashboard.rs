@@ -3927,8 +3927,8 @@ impl DashboardApp {
             Vec2::splat(size),
             egui::Button::new("")
                 .fill(fill)
-                .stroke(Stroke::new(1.0, Color32::WHITE))
-                .corner_radius(size / 2.0),
+                .stroke(Stroke::new(1.0, LINE))
+                .corner_radius(8.0),
         );
         response.clone().on_hover_text(label);
         icons::paint_in_rect(
