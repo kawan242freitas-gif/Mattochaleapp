@@ -308,7 +308,9 @@ impl DashboardApp {
     }
 
     fn start_update_download(&mut self, ctx: egui::Context) {
-        let Some(update) = self.update_available.clone() else { return; };
+        let Some(update) = self.update_available.clone() else {
+            return;
+        };
         self.update_busy = true;
         self.update_progress = 0;
         self.update_message = Some(format!("Baixando atualização {}…", update.version));
@@ -318,7 +320,9 @@ impl DashboardApp {
             let result = updater::download(&update, |percent| {
                 let _ = tx.send(Event::UpdateProgress(percent));
                 ctx.request_repaint();
-            }).map(|path| (path, version)).map_err(|e| e.to_string());
+            })
+            .map(|path| (path, version))
+            .map_err(|e| e.to_string());
             let _ = tx.send(Event::UpdateDownloaded(result));
             ctx.request_repaint();
         });
@@ -344,9 +348,16 @@ impl DashboardApp {
                     }
                     self.products = products;
                 }
-                Event::UpdateChecked(Ok(update)) => { self.update_available = update; }
-                Event::UpdateChecked(Err(error)) => { self.update_message = Some(format!("Não foi possível verificar atualizações: {error}")); }
-                Event::UpdateProgress(percent) => { self.update_progress = percent; }
+                Event::UpdateChecked(Ok(update)) => {
+                    self.update_available = update;
+                }
+                Event::UpdateChecked(Err(error)) => {
+                    self.update_message =
+                        Some(format!("Não foi possível verificar atualizações: {error}"));
+                }
+                Event::UpdateProgress(percent) => {
+                    self.update_progress = percent;
+                }
                 Event::UpdateDownloaded(Ok((path, version))) => {
                     self.update_progress = 100;
                     self.update_message = Some("Aplicando atualização…".to_owned());
@@ -357,10 +368,17 @@ impl DashboardApp {
                         .spawn();
                     match launched {
                         Ok(_) => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
-                        Err(error) => { self.update_busy = false; self.update_message = Some(format!("Falha ao iniciar a atualização: {error}")); }
+                        Err(error) => {
+                            self.update_busy = false;
+                            self.update_message =
+                                Some(format!("Falha ao iniciar a atualização: {error}"));
+                        }
                     }
                 }
-                Event::UpdateDownloaded(Err(error)) => { self.update_busy = false; self.update_message = Some(format!("Falha ao baixar atualização: {error}")); }
+                Event::UpdateDownloaded(Err(error)) => {
+                    self.update_busy = false;
+                    self.update_message = Some(format!("Falha ao baixar atualização: {error}"));
+                }
                 Event::Products(Err(error)) => {
                     self.products_loading = false;
                     self.product_error = Some(error);
@@ -446,8 +464,16 @@ impl DashboardApp {
     fn title_bar(&mut self, root: &mut egui::Ui) {
         let ctx = root.ctx().clone();
         let launcher = self.section == Section::Launcher;
-        let bar_fill = if launcher { Color32::from_rgb(31, 19, 12) } else { SURFACE };
-        let title_color = if launcher { Color32::from_rgb(237, 238, 232) } else { INK };
+        let bar_fill = if launcher {
+            Color32::from_rgb(31, 19, 12)
+        } else {
+            SURFACE
+        };
+        let title_color = if launcher {
+            Color32::from_rgb(237, 238, 232)
+        } else {
+            INK
+        };
         egui::Panel::top("matto-window-title")
             .exact_size(if launcher { 60.0 } else { 44.0 })
             .frame(
@@ -498,7 +524,10 @@ impl DashboardApp {
                             if self.section == Section::Launcher {
                                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                             } else {
-                                if matches!(self.section, Section::Reservas | Section::Financas | Section::Adega) {
+                                if matches!(
+                                    self.section,
+                                    Section::Reservas | Section::Financas | Section::Adega
+                                ) {
                                     self.launcher_module = self.section;
                                 }
                                 self.section = Section::Launcher;
@@ -615,7 +644,11 @@ impl DashboardApp {
                     .ctx()
                     .pointer_hover_pos()
                     .is_some_and(|pointer| current_rail.contains(pointer));
-                let target_width = if pointer_over_rail { expanded_width } else { 72.0 };
+                let target_width = if pointer_over_rail {
+                    expanded_width
+                } else {
+                    72.0
+                };
                 let dt = ui.input(|input| input.stable_dt).clamp(0.0, 0.1);
                 let easing = 1.0 - (-dt * 14.0).exp();
                 self.launcher_rail_width += (target_width - self.launcher_rail_width) * easing;
@@ -629,10 +662,8 @@ impl DashboardApp {
                     bounds.min,
                     Pos2::new(bounds.left() + rail_width, bounds.bottom()),
                 );
-                let hero_rect = Rect::from_min_max(
-                    Pos2::new(rail_rect.right(), bounds.top()),
-                    bounds.max,
-                );
+                let hero_rect =
+                    Rect::from_min_max(Pos2::new(rail_rect.right(), bounds.top()), bounds.max);
                 let painter = ui.painter().clone();
 
                 painter.rect_filled(bounds, 0.0, NIGHT);
@@ -657,7 +688,10 @@ impl DashboardApp {
                 );
                 painter.rect_filled(rail_rect, 0.0, RAIL);
                 painter.line_segment(
-                    [Pos2::new(rail_rect.right(), rail_rect.top()), Pos2::new(rail_rect.right(), rail_rect.bottom())],
+                    [
+                        Pos2::new(rail_rect.right(), rail_rect.top()),
+                        Pos2::new(rail_rect.right(), rail_rect.bottom()),
+                    ],
                     Stroke::new(1.0, Color32::from_rgb(43, 49, 51)),
                 );
 
@@ -666,37 +700,73 @@ impl DashboardApp {
                 // Mantém o avatar próximo, mas separado, da cápsula dos módulos.
                 let profile_capsule = Rect::from_center_size(
                     Pos2::new(rail_rect.center().x, rail_rect.center().y - 28.0),
-                    Vec2::new(if rail_collapsed { 56.0 } else { rail_width - 20.0 }, 56.0),
+                    Vec2::new(
+                        if rail_collapsed {
+                            56.0
+                        } else {
+                            rail_width - 20.0
+                        },
+                        56.0,
+                    ),
                 );
                 let profile_center = Pos2::new(
-                    if rail_collapsed { rail_rect.center().x } else { profile_capsule.left() + 28.0 },
+                    if rail_collapsed {
+                        rail_rect.center().x
+                    } else {
+                        profile_capsule.left() + 28.0
+                    },
                     profile_capsule.center().y,
                 );
                 painter.rect_filled(profile_capsule, 28.0, Color32::from_rgb(12, 16, 17));
-                painter.rect_stroke(profile_capsule, 28.0, Stroke::new(1.0, Color32::from_rgb(43, 49, 51)), egui::StrokeKind::Inside);
+                painter.rect_stroke(
+                    profile_capsule,
+                    28.0,
+                    Stroke::new(1.0, Color32::from_rgb(43, 49, 51)),
+                    egui::StrokeKind::Inside,
+                );
                 if !rail_collapsed {
                     painter.text(
                         Pos2::new(profile_capsule.left() + 56.0, profile_center.y),
                         Align2::LEFT_CENTER,
-                        if self.profile_name.trim().is_empty() { "Perfil" } else { &self.profile_name },
+                        if self.profile_name.trim().is_empty() {
+                            "Perfil"
+                        } else {
+                            &self.profile_name
+                        },
                         FontId::proportional(16.0),
                         TEXT,
                     );
                 }
-                let profile_rect = Rect::from_center_size(profile_center, Vec2::splat(profile_size));
-                let profile_response = if let Some(frame) = self.profile_frames.get(self.profile_frame_index) {
-                    ui.put(
-                        profile_rect,
-                        egui::Image::new((frame.texture.id(), Vec2::splat(profile_size)))
-                            .fit_to_exact_size(Vec2::splat(profile_size))
-                            .corner_radius(profile_size * 0.5)
-                            .sense(Sense::click()),
-                    )
-                } else {
-                    painter.circle_filled(profile_center, profile_size * 0.5, Color32::from_rgb(62, 46, 33));
-                    icons::paint_in_rect(ui, &self.icons, Icon::UserRound, profile_rect.shrink(8.0), TEXT);
-                    ui.interact(profile_rect, ui.scope_id().with("launcher-profile"), Sense::click())
-                };
+                let profile_rect =
+                    Rect::from_center_size(profile_center, Vec2::splat(profile_size));
+                let profile_response =
+                    if let Some(frame) = self.profile_frames.get(self.profile_frame_index) {
+                        ui.put(
+                            profile_rect,
+                            egui::Image::new((frame.texture.id(), Vec2::splat(profile_size)))
+                                .fit_to_exact_size(Vec2::splat(profile_size))
+                                .corner_radius(profile_size * 0.5)
+                                .sense(Sense::click()),
+                        )
+                    } else {
+                        painter.circle_filled(
+                            profile_center,
+                            profile_size * 0.5,
+                            Color32::from_rgb(62, 46, 33),
+                        );
+                        icons::paint_in_rect(
+                            ui,
+                            &self.icons,
+                            Icon::UserRound,
+                            profile_rect.shrink(8.0),
+                            TEXT,
+                        );
+                        ui.interact(
+                            profile_rect,
+                            ui.scope_id().with("launcher-profile"),
+                            Sense::click(),
+                        )
+                    };
                 if profile_response.on_hover_text("Configurações").clicked() {
                     self.section = Section::Configuracoes;
                 }
@@ -706,11 +776,7 @@ impl DashboardApp {
                         Pos2::new(rail_rect.center().x, rail_rect.center().y + 65.0),
                         Vec2::new(56.0, 116.0),
                     );
-                    painter.rect_filled(
-                        capsule,
-                        28.0,
-                        Color32::from_rgb(12, 16, 17),
-                    );
+                    painter.rect_filled(capsule, 28.0, Color32::from_rgb(12, 16, 17));
                     painter.rect_stroke(
                         capsule,
                         28.0,
@@ -789,11 +855,15 @@ impl DashboardApp {
                 let button_pos = Pos2::new(copy_left, subtitle_pos.y + 62.0);
                 let is_reservas = self.launcher_module == Section::Reservas;
                 let update_mode = self.update_available.is_some() || self.update_busy;
-                let has_image_button = update_mode
-                    || (is_reservas || self.launcher_module == Section::Adega);
-                let button_label = if self.update_busy { "ATUALIZAÇÃO PENDENTE".to_owned() }
-                    else if let Some(update) = &self.update_available { format!("ATUALIZAR PARA {}", update.version) }
-                    else { button_text.to_owned() };
+                let has_image_button =
+                    update_mode || (is_reservas || self.launcher_module == Section::Adega);
+                let button_label = if self.update_busy {
+                    "ATUALIZAÇÃO PENDENTE".to_owned()
+                } else if let Some(update) = &self.update_available {
+                    format!("ATUALIZAR PARA {}", update.version)
+                } else {
+                    button_text.to_owned()
+                };
                 let button_size = if has_image_button {
                     Vec2::new(480.0, 110.0)
                 } else {
@@ -864,9 +934,22 @@ impl DashboardApp {
                         }
                     }
                     if self.update_busy {
-                        let bar = Rect::from_min_size(Pos2::new(button_rect.left(), button_rect.bottom() + 20.0), Vec2::new(button_rect.width(), 12.0));
+                        let bar = Rect::from_min_size(
+                            Pos2::new(button_rect.left(), button_rect.bottom() + 20.0),
+                            Vec2::new(button_rect.width(), 12.0),
+                        );
                         painter.rect_filled(bar, 6.0, Color32::from_rgb(49, 31, 20));
-                        painter.rect_filled(Rect::from_min_size(bar.min, Vec2::new(bar.width() * self.update_progress as f32 / 100.0, bar.height())), 6.0, ACCENT);
+                        painter.rect_filled(
+                            Rect::from_min_size(
+                                bar.min,
+                                Vec2::new(
+                                    bar.width() * self.update_progress as f32 / 100.0,
+                                    bar.height(),
+                                ),
+                            ),
+                            6.0,
+                            ACCENT,
+                        );
                     }
                 }
                 if button.clicked() {
@@ -894,7 +977,8 @@ impl DashboardApp {
         let width = ui.available_width();
         let expanded = width > 112.0;
         let item_height = if expanded { 68.0 } else { 46.0 };
-        let (rect, response) = ui.allocate_exact_size(Vec2::new(width, item_height), Sense::click());
+        let (rect, response) =
+            ui.allocate_exact_size(Vec2::new(width, item_height), Sense::click());
         let visual_rect = if expanded {
             rect
         } else {
@@ -933,11 +1017,11 @@ impl DashboardApp {
                 ),
                 Vec2::splat(if expanded { 31.0 } else { 23.0 }),
             ),
-                if selected && !expanded {
-                    Color32::from_rgb(224, 155, 88)
-                } else {
-                    Color32::from_rgb(232, 234, 230)
-                },
+            if selected && !expanded {
+                Color32::from_rgb(224, 155, 88)
+            } else {
+                Color32::from_rgb(232, 234, 230)
+            },
         );
         if expanded {
             ui.painter().text(
@@ -1139,140 +1223,371 @@ impl DashboardApp {
     }
 
     fn show_reservas(&mut self, ui: &mut egui::Ui) {
+        const BG: Color32 = Color32::from_rgb(11, 19, 15);
+        const SURFACE: Color32 = Color32::from_rgb(18, 31, 24);
+        const SURFACE_HOVER: Color32 = Color32::from_rgb(24, 42, 32);
+        const BORDER: Color32 = Color32::from_rgb(48, 83, 62);
+        const TEXT: Color32 = Color32::from_rgb(235, 242, 235);
+        const MUTED: Color32 = Color32::from_rgb(155, 175, 160);
+        const ACCENT: Color32 = Color32::from_rgb(102, 181, 128);
+        const BLOCKED: Color32 = Color32::from_rgb(213, 164, 94);
+        const OCCUPIED: Color32 = Color32::from_rgb(187, 104, 87);
+
+        ui.painter().rect_filled(ui.max_rect(), 0.0, BG);
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                ui.add_space(18.0);
-                ui.add_space(0.0);
-                self.hero(ui);
-                ui.add_space(34.0);
-
-                let total_width = ui.available_width();
-                let panel_height = 347.0;
+                ui.add_space(14.0);
                 ui.horizontal(|ui| {
-                    let calendar_width = total_width * 0.645;
-                    ui.allocate_ui_with_layout(
-                        Vec2::new(calendar_width, panel_height),
-                        Layout::top_down(Align::Min),
-                        |ui| self.calendar_panel(ui),
-                    );
-                    ui.add_space(16.0);
-                    ui.separator();
-                    ui.add_space(16.0);
-                    ui.allocate_ui_with_layout(
-                        Vec2::new(
-                            (total_width - calendar_width - 80.0).max(300.0),
-                            panel_height,
-                        ),
-                        Layout::top_down(Align::Min),
-                        |ui| self.editor_panel(ui),
-                    );
+                    ui.vertical(|ui| {
+                        ui.label(
+                            RichText::new("AGENDA DE OCUPAÇÃO")
+                                .size(10.0)
+                                .strong()
+                                .color(ACCENT),
+                        );
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                RichText::new(month_name(self.month))
+                                    .size(28.0)
+                                    .strong()
+                                    .color(TEXT),
+                            );
+                            ui.label(RichText::new(self.year.to_string()).size(25.0).color(MUTED));
+                        });
+                    });
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        let chalet_label = self
+                            .preferences
+                            .chalet_names
+                            .get(self.selected_chalet.saturating_sub(1) as usize)
+                            .cloned()
+                            .unwrap_or_else(|| format!("Chalé {:02}", self.selected_chalet));
+                        if ui
+                            .add_sized(
+                                Vec2::new(142.0, 34.0),
+                                egui::Button::new(
+                                    RichText::new(chalet_label).size(12.0).color(TEXT),
+                                )
+                                .fill(SURFACE)
+                                .stroke(Stroke::new(1.0, BORDER))
+                                .corner_radius(8.0),
+                            )
+                            .clicked()
+                        {
+                            let chalet_count =
+                                self.preferences.chalet_names.len().clamp(1, 99) as u8;
+                            self.selected_chalet = self.selected_chalet % chalet_count + 1;
+                        }
+                        ui.add_space(8.0);
+                        if self.icon_button(
+                            ui,
+                            Icon::ChevronRight,
+                            34.0,
+                            SURFACE,
+                            TEXT,
+                            "Próximo mês",
+                        ) {
+                            self.next_month();
+                        }
+                        if self.icon_button(
+                            ui,
+                            Icon::ChevronLeft,
+                            34.0,
+                            SURFACE,
+                            TEXT,
+                            "Mês anterior",
+                        ) {
+                            self.previous_month();
+                        }
+                        ui.add_space(8.0);
+                        if ui
+                            .add_sized(
+                                Vec2::new(48.0, 34.0),
+                                egui::Button::new(
+                                    RichText::new("Hoje").size(11.0).strong().color(TEXT),
+                                )
+                                .fill(SURFACE)
+                                .stroke(Stroke::new(1.0, BORDER))
+                                .corner_radius(8.0),
+                            )
+                            .clicked()
+                        {
+                            let (year, month, _) = today_utc();
+                            self.year = year;
+                            self.month = month;
+                            self.selected_range = None;
+                        }
+                    });
                 });
+
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    self.legend(ui, ACCENT, "Disponível");
+                    ui.add_space(10.0);
+                    self.legend(ui, BLOCKED, "Bloqueada");
+                    ui.add_space(10.0);
+                    self.legend(ui, OCCUPIED, "Ocupada");
+                });
+
+                ui.add_space(12.0);
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(self.range_label()).size(12.0).color(MUTED));
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        let save = ui.add_sized(
+                            Vec2::new(128.0, 34.0),
+                            egui::Button::new(
+                                RichText::new("Salvar datas")
+                                    .size(12.0)
+                                    .strong()
+                                    .color(Color32::WHITE),
+                            )
+                            .fill(Color32::from_rgb(38, 91, 55))
+                            .stroke(Stroke::NONE)
+                            .corner_radius(8.0),
+                        );
+                        if save.clicked() {
+                            self.save_availability();
+                        }
+                        ui.add_space(8.0);
+                        let release = ui.add_sized(
+                            Vec2::new(104.0, 34.0),
+                            egui::Button::new(RichText::new("Liberar").size(12.0).color(TEXT))
+                                .fill(SURFACE_HOVER)
+                                .stroke(Stroke::new(1.0, BORDER))
+                                .corner_radius(8.0),
+                        );
+                        if release.clicked() {
+                            self.release_selected();
+                        }
+                        ui.add_space(8.0);
+                        let block = ui.add_sized(
+                            Vec2::new(104.0, 34.0),
+                            egui::Button::new(RichText::new("Bloquear").size(12.0).color(BLOCKED))
+                                .fill(Color32::from_rgb(52, 39, 23))
+                                .stroke(Stroke::new(1.0, Color32::from_rgb(105, 78, 43)))
+                                .corner_radius(8.0),
+                        );
+                        if block.clicked() {
+                            self.block_selected();
+                        }
+                    });
+                });
+
+                ui.add_space(10.0);
+                self.calendar_panel(ui);
+
+                ui.add_space(12.0);
+                let month_prefix = format!("{:04}-{:02}-", self.year, self.month);
+                let blocked = self
+                    .blocked_dates
+                    .iter()
+                    .filter(|date| date.starts_with(&month_prefix))
+                    .count();
+                let occupied = self
+                    .occupied_dates
+                    .iter()
+                    .filter(|date| date.starts_with(&month_prefix))
+                    .count();
+                let available = (days_in_month(self.year, self.month) as usize)
+                    .saturating_sub(blocked + occupied);
+                let metrics = [
+                    (
+                        "Dias disponíveis",
+                        available.to_string(),
+                        "neste mês",
+                        ACCENT,
+                    ),
+                    (
+                        "Datas bloqueadas",
+                        blocked.to_string(),
+                        "neste mês",
+                        BLOCKED,
+                    ),
+                    ("Dias ocupados", occupied.to_string(), "neste mês", OCCUPIED),
+                    (
+                        "Chalés ativos",
+                        self.preferences.chalet_names.len().to_string(),
+                        "unidades cadastradas",
+                        TEXT,
+                    ),
+                ];
+                let gap = 8.0;
+                let card_width = ((ui.available_width() - gap * 3.0) / 4.0).max(120.0);
+                ui.horizontal(|ui| {
+                    for (index, (label, value, caption, color)) in metrics.into_iter().enumerate() {
+                        self.reservation_metric(ui, label, &value, caption, color, card_width);
+                        if index < 3 {
+                            ui.add_space(gap);
+                        }
+                    }
+                });
+
+                if let Some(notice) = &self.notice {
+                    ui.add_space(8.0);
+                    ui.label(RichText::new(notice).size(12.0).color(ACCENT));
+                }
+                ui.add_space(12.0);
             });
     }
 
     fn calendar_panel(&mut self, ui: &mut egui::Ui) {
-        Frame::new()
-            .fill(SURFACE)
-            .stroke(Stroke::new(1.0, Color32::WHITE))
-            .corner_radius(18)
-            .inner_margin(Margin::symmetric(24, 18))
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    self.icon_button(
-                        ui,
-                        Icon::ChevronLeft,
-                        42.0,
-                        SURFACE_ALT,
-                        INK,
-                        "Mes anterior",
-                    );
-                    ui.add_space(12.0);
-                    ui.vertical_centered(|ui| {
-                        ui.label(
-                            RichText::new(format!("{} {}", month_name(self.month), self.year))
-                                .size(25.0)
-                                .strong()
-                                .color(INK),
-                        );
-                    });
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        self.icon_button(
-                            ui,
-                            Icon::ArrowRight,
-                            42.0,
-                            SURFACE_ALT,
-                            INK,
-                            "Proximo mes",
-                        );
-                    });
-                });
-                ui.add_space(10.0);
+        const PANEL: Color32 = Color32::from_rgb(15, 26, 20);
+        const BORDER: Color32 = Color32::from_rgb(48, 83, 62);
+        const TEXT: Color32 = Color32::from_rgb(235, 242, 235);
+        const MUTED: Color32 = Color32::from_rgb(155, 175, 160);
+        const ACCENT: Color32 = Color32::from_rgb(102, 181, 128);
+        const BLOCKED: Color32 = Color32::from_rgb(213, 164, 94);
+        const OCCUPIED: Color32 = Color32::from_rgb(187, 104, 87);
 
-                let weekdays = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"];
-                let cell_width = (ui.available_width() / 7.0).min(94.0);
+        Frame::new()
+            .fill(PANEL)
+            .stroke(Stroke::new(1.0, BORDER))
+            .corner_radius(12.0)
+            .inner_margin(Margin::symmetric(10, 10))
+            .show(ui, |ui| {
+                let weekdays = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
+                let spacing = Vec2::new(6.0, 6.0);
+                let cell_width = ((ui.available_width() - spacing.x * 6.0) / 7.0).max(48.0);
+                let cell_height = 68.0;
+                let first_weekday = (weekday_monday(self.year, self.month) + 6) % 7;
+                let current_days = days_in_month(self.year, self.month);
+                let (previous_year, previous_month) = if self.month == 1 {
+                    (self.year - 1, 12)
+                } else {
+                    (self.year, self.month - 1)
+                };
+                let (next_year, next_month) = if self.month == 12 {
+                    (self.year + 1, 1)
+                } else {
+                    (self.year, self.month + 1)
+                };
+                let previous_days = days_in_month(previous_year, previous_month);
                 egui::Grid::new("availability-calendar")
                     .num_columns(7)
-                    .spacing(Vec2::new(4.0, 4.0))
+                    .spacing(spacing)
                     .show(ui, |ui| {
                         for weekday in weekdays {
                             ui.add_sized(
-                                Vec2::new(cell_width, 26.0),
+                                Vec2::new(cell_width, 20.0),
                                 egui::Label::new(
-                                    RichText::new(weekday).size(14.0).strong().color(MUTED),
+                                    RichText::new(weekday).size(11.0).strong().color(MUTED),
                                 )
-                                .halign(egui::Align::Center),
+                                .halign(egui::Align::Min),
                             );
                         }
                         ui.end_row();
-                        let first_weekday = weekday_monday(self.year, self.month);
-                        let days = days_in_month(self.year, self.month);
-                        for _ in 0..first_weekday {
-                            ui.add_sized(
-                                Vec2::new(
-                                    cell_width,
-                                    if self.preferences.compact_calendar {
-                                        32.0
-                                    } else {
-                                        38.0
-                                    },
-                                ),
-                                egui::Label::new(""),
-                            );
-                        }
-                        for day in 1..=days {
-                            let status = self.day_status(day);
-                            let selected = self.day_selected(day);
-                            let fill = if selected {
-                                GREEN_MID
-                            } else {
-                                match status {
-                                    DayStatus::Disponivel => Color32::TRANSPARENT,
-                                    DayStatus::Bloqueada => ORANGE_PALE,
-                                    DayStatus::Ocupada => RED_PALE,
-                                }
-                            };
-                            let color = if selected { Color32::WHITE } else { INK };
-                            let response = ui.add_sized(
-                                Vec2::new(
-                                    cell_width,
-                                    if self.preferences.compact_calendar {
-                                        32.0
-                                    } else {
-                                        38.0
-                                    },
-                                ),
-                                egui::Button::new(
-                                    RichText::new(day.to_string()).size(17.0).color(color),
+                        for cell_index in 0..42 {
+                            let (day, in_month, _date_year, _date_month) = if cell_index
+                                < first_weekday
+                            {
+                                (
+                                    previous_days - first_weekday as u32 + cell_index as u32 + 1,
+                                    false,
+                                    previous_year,
+                                    previous_month,
                                 )
-                                .fill(fill)
-                                .stroke(Stroke::NONE)
-                                .corner_radius(18),
+                            } else if cell_index < first_weekday + current_days as usize {
+                                (
+                                    (cell_index - first_weekday + 1) as u32,
+                                    true,
+                                    self.year,
+                                    self.month,
+                                )
+                            } else {
+                                (
+                                    (cell_index - first_weekday - current_days as usize + 1) as u32,
+                                    false,
+                                    next_year,
+                                    next_month,
+                                )
+                            };
+                            let (rect, response) = ui.allocate_exact_size(
+                                Vec2::new(cell_width, cell_height),
+                                if in_month {
+                                    Sense::click()
+                                } else {
+                                    Sense::hover()
+                                },
                             );
+                            let status = if in_month {
+                                self.day_status(day)
+                            } else {
+                                DayStatus::Disponivel
+                            };
+                            let selected = in_month && self.day_selected(day);
+                            let fill = if selected {
+                                Color32::from_rgb(31, 75, 48)
+                            } else if response.hovered() && in_month {
+                                Color32::from_rgb(24, 42, 32)
+                            } else {
+                                PANEL
+                            };
+                            let painter = ui.painter();
+                            painter.rect_filled(rect, 8.0, fill);
+                            painter.rect_stroke(
+                                rect,
+                                8.0,
+                                Stroke::new(
+                                    if selected { 1.5 } else { 1.0 },
+                                    if selected { ACCENT } else { BORDER },
+                                ),
+                                egui::StrokeKind::Inside,
+                            );
+                            painter.text(
+                                Pos2::new(rect.left() + 10.0, rect.top() + 10.0),
+                                Align2::LEFT_TOP,
+                                day.to_string(),
+                                FontId::proportional(13.0),
+                                if in_month {
+                                    TEXT
+                                } else {
+                                    Color32::from_rgb(81, 99, 86)
+                                },
+                            );
+                            let status_color = match status {
+                                DayStatus::Disponivel => None,
+                                DayStatus::Bloqueada => Some(BLOCKED),
+                                DayStatus::Ocupada => Some(OCCUPIED),
+                            };
+                            if let Some(color) = status_color {
+                                painter.circle_filled(
+                                    Pos2::new(rect.right() - 10.0, rect.top() + 10.0),
+                                    3.0,
+                                    color,
+                                );
+                                let (label, badge) = match status {
+                                    DayStatus::Bloqueada => {
+                                        ("Bloqueada", Color32::from_rgb(57, 43, 26))
+                                    }
+                                    DayStatus::Ocupada => {
+                                        ("Ocupada", Color32::from_rgb(54, 34, 30))
+                                    }
+                                    DayStatus::Disponivel => ("", PANEL),
+                                };
+                                let badge_rect = Rect::from_min_max(
+                                    Pos2::new(rect.left() + 8.0, rect.bottom() - 23.0),
+                                    Pos2::new(rect.right() - 8.0, rect.bottom() - 7.0),
+                                );
+                                painter.rect_filled(badge_rect, 4.0, badge);
+                                painter.text(
+                                    Pos2::new(badge_rect.left() + 5.0, badge_rect.center().y),
+                                    Align2::LEFT_CENTER,
+                                    label,
+                                    FontId::proportional(9.0),
+                                    color,
+                                );
+                            } else if selected {
+                                painter.circle_filled(
+                                    Pos2::new(rect.right() - 10.0, rect.top() + 10.0),
+                                    3.0,
+                                    ACCENT,
+                                );
+                            }
                             if response.clicked() {
                                 self.select_day(day);
                             }
-                            if (first_weekday + day as usize) % 7 == 0 {
+                            if cell_index % 7 == 6 {
                                 ui.end_row();
                             }
                         }
@@ -1280,75 +1595,45 @@ impl DashboardApp {
             });
     }
 
-    fn editor_panel(&mut self, ui: &mut egui::Ui) {
-        ui.add_space(1.0);
-        ui.label(RichText::new("Editar datas").size(25.0).strong().color(INK));
-        ui.add_space(8.0);
-        let date_rect = ui
-            .allocate_exact_size(Vec2::new(ui.available_width(), 44.0), Sense::hover())
-            .0;
-        ui.painter().rect_filled(date_rect, 22.0, SURFACE);
-        ui.painter().rect_stroke(
-            date_rect,
-            22.0,
-            Stroke::new(1.0, Color32::WHITE),
+    fn reservation_metric(
+        &self,
+        ui: &mut egui::Ui,
+        label: &str,
+        value: &str,
+        caption: &str,
+        color: Color32,
+        width: f32,
+    ) {
+        let (rect, _) = ui.allocate_exact_size(Vec2::new(width, 76.0), Sense::hover());
+        let painter = ui.painter();
+        painter.rect_filled(rect, 8.0, Color32::from_rgb(18, 31, 24));
+        painter.rect_stroke(
+            rect,
+            8.0,
+            Stroke::new(1.0, Color32::from_rgb(48, 83, 62)),
             egui::StrokeKind::Inside,
         );
-        icons::paint_in_rect(
-            ui,
-            &self.icons,
-            Icon::CalendarDays,
-            Rect::from_center_size(
-                Pos2::new(date_rect.left() + 26.0, date_rect.center().y),
-                Vec2::splat(20.0),
-            ),
-            INK,
+        painter.text(
+            rect.left_top() + Vec2::new(12.0, 10.0),
+            Align2::LEFT_TOP,
+            label,
+            FontId::proportional(10.0),
+            Color32::from_rgb(183, 203, 188),
         );
-        ui.painter().text(
-            Pos2::new(date_rect.left() + 50.0, date_rect.center().y),
-            Align2::LEFT_CENTER,
-            self.range_label(),
-            FontId::proportional(16.0),
-            INK,
+        painter.text(
+            rect.left_top() + Vec2::new(12.0, 30.0),
+            Align2::LEFT_TOP,
+            value,
+            FontId::proportional(20.0),
+            color,
         );
-        ui.add_space(12.0);
-        let horizontal_gaps = ui.spacing().item_spacing.x * 2.0 + 8.0;
-        let button_width = ((ui.available_width() - horizontal_gaps) * 0.5).max(120.0);
-        ui.horizontal(|ui| {
-            self.action_button(
-                ui,
-                "Bloquear",
-                ORANGE_PALE,
-                ORANGE,
-                button_width,
-                Self::block_selected,
-            );
-            ui.add_space(8.0);
-            self.action_button(
-                ui,
-                "Liberar",
-                GREEN_PALE,
-                INK,
-                button_width,
-                Self::release_selected,
-            );
-        });
-        ui.add_space(10.0);
-        if self.primary_button(ui, "Salvar datas", GREEN) {
-            self.save_availability();
-        }
-        if let Some(notice) = &self.notice {
-            ui.add_space(6.0);
-            ui.label(RichText::new(notice).size(12.0).color(GREEN));
-        }
-        ui.add_space(12.0);
-        ui.separator();
-        ui.add_space(8.0);
-        ui.horizontal(|ui| {
-            self.legend(ui, GREEN_MID, "Disponível");
-            self.legend(ui, Color32::from_rgb(226, 179, 136), "Bloqueada");
-            self.legend(ui, RED, "Ocupada");
-        });
+        painter.text(
+            Pos2::new(rect.left() + 12.0, rect.bottom() - 9.0),
+            Align2::LEFT_BOTTOM,
+            caption,
+            FontId::proportional(9.0),
+            Color32::from_rgb(137, 160, 144),
+        );
     }
 
     fn show_financas(&mut self, ui: &mut egui::Ui) {
@@ -2809,7 +3094,11 @@ impl DashboardApp {
                 color,
             );
             ui.add_space(16.0);
-            ui.label(RichText::new(label).size(12.0).color(MUTED));
+            ui.label(
+                RichText::new(label)
+                    .size(11.0)
+                    .color(Color32::from_rgb(183, 203, 188)),
+            );
         });
     }
 
@@ -3046,7 +3335,11 @@ fn load_user_profile(ctx: &egui::Context) -> (String, Vec<ProfileFrame>) {
     {
         image::codecs::gif::GifDecoder::new(Cursor::new(bytes.as_slice()))
             .ok()
-            .and_then(|decoder| image::AnimationDecoder::into_frames(decoder).collect_frames().ok())
+            .and_then(|decoder| {
+                image::AnimationDecoder::into_frames(decoder)
+                    .collect_frames()
+                    .ok()
+            })
             .unwrap_or_default()
             .into_iter()
             .take(120)
@@ -3129,6 +3422,26 @@ fn tone_label(tone: &str) -> &'static str {
 
 fn date_key(year: i32, month: u32, day: u32) -> String {
     format!("{year:04}-{month:02}-{day:02}")
+}
+
+fn today_utc() -> (i32, u32, u32) {
+    let unix_days = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64
+        / 86_400;
+    let z = unix_days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let day_of_era = z - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let mut year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_piece = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_piece + 2) / 5 + 1;
+    let month = month_piece + if month_piece < 10 { 3 } else { -9 };
+    year += i64::from(month <= 2);
+    (year as i32, month as u32, day as u32)
 }
 
 fn month_name(month: u32) -> &'static str {
