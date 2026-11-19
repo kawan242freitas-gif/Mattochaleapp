@@ -4191,18 +4191,21 @@ fn set_theme(ctx: &egui::Context) {
     let mut style = (*ctx.style_of(egui::Theme::Dark)).clone();
     style.visuals = egui::Visuals::dark();
     style.visuals.panel_fill = CANVAS;
-    style.visuals.window_fill = Color32::from_rgba_unmultiplied(250, 249, 244, 242);
-    style.visuals.extreme_bg_color = SURFACE;
+    // egui uses window_fill for ComboBox and menu popup frames as well as windows.
+    // Keep these surfaces in the same dark wood palette as the rest of the app.
+    style.visuals.window_fill = SURFACE;
+    style.visuals.window_stroke = Stroke::new(1.0, LINE);
+    style.visuals.extreme_bg_color = CANVAS;
     style.visuals.faint_bg_color = SURFACE_ALT;
     style.visuals.override_text_color = Some(INK);
-    style.visuals.selection.bg_fill = GREEN_PALE;
+    style.visuals.selection.bg_fill = ORANGE_PALE;
     style.visuals.widgets.inactive.bg_fill = SURFACE;
     style.visuals.widgets.inactive.fg_stroke.color = INK;
     style.visuals.widgets.inactive.bg_stroke = Stroke::new(1.0, LINE);
-    style.visuals.widgets.hovered.bg_fill = GREEN_PALE;
+    style.visuals.widgets.hovered.bg_fill = SURFACE_ALT;
     style.visuals.widgets.hovered.fg_stroke.color = INK;
-    style.visuals.widgets.active.bg_fill = GREEN;
-    style.visuals.widgets.active.fg_stroke.color = Color32::WHITE;
+    style.visuals.widgets.active.bg_fill = Color32::from_rgb(138, 79, 36);
+    style.visuals.widgets.active.fg_stroke.color = INK;
     style.spacing.item_spacing = Vec2::new(8.0, 8.0);
     style.spacing.button_padding = Vec2::new(13.0, 8.0);
     ctx.set_style_of(egui::Theme::Dark, style);
