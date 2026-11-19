@@ -3234,7 +3234,6 @@ impl eframe::App for DashboardApp {
             self.show_launcher(root);
             return;
         }
-        self.navigation(root);
         egui::CentralPanel::default()
             .frame(
                 Frame::new()
