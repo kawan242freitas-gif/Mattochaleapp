@@ -103,6 +103,115 @@ enum DayStatus {
     Ocupada,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum ReservationTab {
+    #[default]
+    Overview,
+    Finance,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum FinanceTab {
+    #[default]
+    Movements,
+    Payables,
+}
+
+#[derive(Clone, Debug, Default, serde::Deserialize, serde::Serialize)]
+#[serde(default)]
+struct ReservationRecord {
+    id: String,
+    responsible: String,
+    chalet: String,
+    guests: u32,
+    check_in: String,
+    check_out: String,
+    check_in_time: String,
+    check_out_time: String,
+    pets: bool,
+    breakfast: bool,
+    decoration: bool,
+    reserved: bool,
+    restrictions: String,
+    notes: String,
+    attachments: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default, serde::Deserialize, serde::Serialize)]
+#[serde(default)]
+struct FinancialMovement {
+    id: String,
+    kind: String,
+    description: String,
+    amount_cents: u64,
+    date: String,
+    payment_method: String,
+    category: String,
+    notes: String,
+}
+
+#[derive(Clone, Debug, Default, serde::Deserialize, serde::Serialize)]
+#[serde(default)]
+struct PayableAccount {
+    id: String,
+    description: String,
+    supplier: String,
+    amount_cents: u64,
+    due_date: String,
+    category: String,
+    installments: String,
+    paid: bool,
+    notes: String,
+}
+
+#[derive(Clone, Debug, Default, serde::Deserialize, serde::Serialize)]
+#[serde(default)]
+struct BusinessData {
+    reservations: Vec<ReservationRecord>,
+    movements: Vec<FinancialMovement>,
+    payables: Vec<PayableAccount>,
+}
+
+#[derive(Default)]
+struct ReservationForm {
+    responsible: String,
+    chalet: String,
+    guests: String,
+    check_in: String,
+    check_out: String,
+    check_in_time: String,
+    check_out_time: String,
+    pets: bool,
+    breakfast: bool,
+    decoration: bool,
+    reserved: bool,
+    restrictions: String,
+    notes: String,
+    attachments: Vec<String>,
+}
+
+#[derive(Default)]
+struct MovementForm {
+    kind: String,
+    description: String,
+    amount: String,
+    date: String,
+    payment_method: String,
+    category: String,
+    notes: String,
+}
+
+#[derive(Default)]
+struct PayableForm {
+    description: String,
+    supplier: String,
+    amount: String,
+    due_date: String,
+    category: String,
+    installments: String,
+    notes: String,
+}
+
 enum Event {
     Products(Result<Vec<Product>, String>),
     ProductImage(String, Result<image::RgbaImage, String>),
@@ -135,11 +244,27 @@ pub struct DashboardApp {
     month: u32,
     year: i32,
     selected_range: Option<(u32, u32)>,
+    selected_calendar_day: String,
+    calendar_chalet_filter: String,
+    reservation_tab: ReservationTab,
     blocked_dates: HashSet<String>,
     occupied_dates: HashSet<String>,
     selected_chalet: u8,
     finance_month: u8,
+    finance_year: i32,
     finance_filter: String,
+    movement_method_filter: String,
+    finance_tab: FinanceTab,
+    reservation_form_open: bool,
+    reservation_form: ReservationForm,
+    editing_reservation_id: Option<String>,
+    reservation_details_id: Option<String>,
+    movement_form_open: bool,
+    movement_form: MovementForm,
+    payable_form_open: bool,
+    payable_form: PayableForm,
+    business_data: BusinessData,
+    business_path: Option<PathBuf>,
     products: Vec<Product>,
     products_loading: bool,
     product_error: Option<String>,
@@ -188,8 +313,10 @@ pub struct DashboardApp {
 impl DashboardApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         set_theme(&cc.egui_ctx);
+        let (initial_year, initial_month, initial_day) = today_utc();
         let (tx, rx) = mpsc::channel();
         let (blocked_dates, availability_path) = load_availability();
+        let (business_data, business_path) = load_business_data();
         let (preferences, preferences_path) = load_preferences();
         let (profile_name, profile_frames) = load_user_profile(&cc.egui_ctx);
         let next_profile_frame = Instant::now()
@@ -241,14 +368,30 @@ impl DashboardApp {
             section: Section::Launcher,
             launcher_module: Section::Reservas,
             launcher_rail_width: 72.0,
-            month: 2,
-            year: 2027,
-            selected_range: Some((19, 21)),
+            month: initial_month,
+            year: initial_year,
+            selected_range: Some((initial_day, initial_day)),
+            selected_calendar_day: date_key(initial_year, initial_month, initial_day),
+            calendar_chalet_filter: "Todos".to_owned(),
+            reservation_tab: ReservationTab::Overview,
             blocked_dates,
             occupied_dates: HashSet::new(),
             selected_chalet: 1,
-            finance_month: 2,
+            finance_month: initial_month as u8,
+            finance_year: initial_year,
             finance_filter: "Todas".to_owned(),
+            movement_method_filter: "Todas".to_owned(),
+            finance_tab: FinanceTab::Movements,
+            reservation_form_open: false,
+            reservation_form: ReservationForm::default(),
+            editing_reservation_id: None,
+            reservation_details_id: None,
+            movement_form_open: false,
+            movement_form: MovementForm::default(),
+            payable_form_open: false,
+            payable_form: PayableForm::default(),
+            business_data,
+            business_path,
             products: Vec::new(),
             products_loading: true,
             product_error: None,
@@ -1234,6 +1377,38 @@ impl DashboardApp {
         const OCCUPIED: Color32 = Color32::from_rgb(174, 82, 52);
 
         ui.painter().rect_filled(ui.max_rect(), 0.0, BG);
+        ui.horizontal(|ui| {
+            for (tab, label) in [
+                (ReservationTab::Overview, "Visão geral"),
+                (ReservationTab::Finance, "Financeiro"),
+            ] {
+                let selected = self.reservation_tab == tab;
+                let response = ui.add_sized(
+                    Vec2::new(130.0, 34.0),
+                    egui::Button::new(
+                        RichText::new(label).size(12.0).strong().color(if selected {
+                            INK
+                        } else {
+                            MUTED
+                        }),
+                    )
+                    .fill(if selected { ORANGE_PALE } else { SURFACE })
+                    .stroke(Stroke::new(1.0, LINE))
+                    .corner_radius(10.0),
+                );
+                if response.clicked() {
+                    self.reservation_tab = tab;
+                    if tab == ReservationTab::Finance {
+                        self.finance_tab = FinanceTab::Movements;
+                    }
+                }
+            }
+        });
+        ui.add_space(8.0);
+        if self.reservation_tab == ReservationTab::Finance {
+            self.show_financas(ui);
+            return;
+        }
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
@@ -1257,28 +1432,23 @@ impl DashboardApp {
                         });
                     });
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        let chalet_label = self
-                            .preferences
-                            .chalet_names
-                            .get(self.selected_chalet.saturating_sub(1) as usize)
-                            .cloned()
-                            .unwrap_or_else(|| format!("Chalé {:02}", self.selected_chalet));
-                        if ui
-                            .add_sized(
-                                Vec2::new(142.0, 34.0),
-                                egui::Button::new(
-                                    RichText::new(chalet_label).size(12.0).color(TEXT),
-                                )
-                                .fill(SURFACE)
-                                .stroke(Stroke::new(1.0, BORDER))
-                                .corner_radius(8.0),
-                            )
-                            .clicked()
-                        {
-                            let chalet_count =
-                                self.preferences.chalet_names.len().clamp(1, 99) as u8;
-                            self.selected_chalet = self.selected_chalet % chalet_count + 1;
-                        }
+                        egui::ComboBox::from_id_salt("reservation-chalet-filter")
+                            .selected_text(&self.calendar_chalet_filter)
+                            .width(142.0)
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(
+                                    &mut self.calendar_chalet_filter,
+                                    "Todos".to_owned(),
+                                    "Todos os chalés",
+                                );
+                                for chalet in &self.preferences.chalet_names {
+                                    ui.selectable_value(
+                                        &mut self.calendar_chalet_filter,
+                                        chalet.clone(),
+                                        chalet,
+                                    );
+                                }
+                            });
                         ui.add_space(8.0);
                         if self.icon_button(
                             ui,
@@ -1313,10 +1483,11 @@ impl DashboardApp {
                             )
                             .clicked()
                         {
-                            let (year, month, _) = today_utc();
+                            let (year, month, day) = today_utc();
                             self.year = year;
                             self.month = month;
                             self.selected_range = None;
+                            self.select_day(day);
                         }
                     });
                 });
@@ -1375,7 +1546,20 @@ impl DashboardApp {
                 });
 
                 ui.add_space(10.0);
-                self.calendar_panel(ui);
+                let calendar_width = (ui.available_width() - 342.0).max(520.0);
+                ui.horizontal_top(|ui| {
+                    ui.allocate_ui_with_layout(
+                        Vec2::new(calendar_width, ui.available_height()),
+                        Layout::top_down(Align::Min),
+                        |ui| self.calendar_panel(ui),
+                    );
+                    ui.separator();
+                    ui.allocate_ui_with_layout(
+                        Vec2::new(320.0, ui.available_height()),
+                        Layout::top_down(Align::Min),
+                        |ui| self.reservation_day_panel(ui),
+                    );
+                });
 
                 ui.add_space(12.0);
                 let month_prefix = format!("{:04}-{:02}-", self.year, self.month);
@@ -1385,17 +1569,29 @@ impl DashboardApp {
                     .filter(|date| date.starts_with(&month_prefix))
                     .count();
                 let occupied = self
-                    .occupied_dates
+                    .business_data
+                    .reservations
                     .iter()
-                    .filter(|date| date.starts_with(&month_prefix))
+                    .filter(|reservation| {
+                        reservation.reserved && reservation.check_in.starts_with(&month_prefix)
+                    })
                     .count();
-                let available = (days_in_month(self.year, self.month) as usize)
-                    .saturating_sub(blocked + occupied);
                 let metrics = [
                     (
-                        "Dias disponíveis",
-                        available.to_string(),
-                        "neste mês",
+                        "Check-ins no mês",
+                        occupied.to_string(),
+                        "entradas previstas",
+                        ACCENT,
+                    ),
+                    (
+                        "Reservas no mês",
+                        self.business_data
+                            .reservations
+                            .iter()
+                            .filter(|reservation| reservation.check_in.starts_with(&month_prefix))
+                            .count()
+                            .to_string(),
+                        "entradas cadastradas",
                         ACCENT,
                     ),
                     (
@@ -1404,7 +1600,6 @@ impl DashboardApp {
                         "neste mês",
                         BLOCKED,
                     ),
-                    ("Dias ocupados", occupied.to_string(), "neste mês", OCCUPIED),
                     (
                         "Chalés ativos",
                         self.preferences.chalet_names.len().to_string(),
@@ -1429,6 +1624,7 @@ impl DashboardApp {
                 }
                 ui.add_space(12.0);
             });
+        self.reservation_windows(ui.ctx());
     }
 
     fn calendar_panel(&mut self, ui: &mut egui::Ui) {
@@ -1478,7 +1674,7 @@ impl DashboardApp {
                         }
                         ui.end_row();
                         for cell_index in 0..42 {
-                            let (day, in_month, _date_year, _date_month) = if cell_index
+                            let (day, in_month, date_year, date_month) = if cell_index
                                 < first_weekday
                             {
                                 (
@@ -1510,14 +1706,34 @@ impl DashboardApp {
                                     Sense::hover()
                                 },
                             );
-                            let status = if in_month {
-                                self.day_status(day)
+                            let date = date_key(date_year, date_month, day);
+                            let reservation = in_month
+                                .then(|| {
+                                    self.business_data.reservations.iter().find(|item| {
+                                        item.reserved
+                                            && item.check_in <= date
+                                            && item.check_out > date
+                                            && (self.calendar_chalet_filter == "Todos"
+                                                || item.chalet == self.calendar_chalet_filter)
+                                    })
+                                })
+                                .flatten();
+                            let status = if !in_month {
+                                DayStatus::Disponivel
+                            } else if reservation.is_some() {
+                                DayStatus::Ocupada
+                            } else if self.blocked_dates.contains(&date) {
+                                DayStatus::Bloqueada
+                            } else if self.occupied_dates.contains(&date) {
+                                DayStatus::Ocupada
                             } else {
                                 DayStatus::Disponivel
                             };
                             let selected = in_month && self.day_selected(day);
                             let fill = if selected {
                                 Color32::from_rgb(77, 43, 22)
+                            } else if reservation.is_some() {
+                                Color32::from_rgb(73, 35, 23)
                             } else if response.hovered() && in_month {
                                 Color32::from_rgb(52, 32, 19)
                             } else {
@@ -1556,14 +1772,24 @@ impl DashboardApp {
                                     3.0,
                                     color,
                                 );
-                                let (label, badge) = match status {
-                                    DayStatus::Bloqueada => {
-                                        ("Bloqueada", Color32::from_rgb(77, 43, 22))
+                                let (label, badge) = if let Some(reservation) = reservation {
+                                    (
+                                        format!(
+                                            "{} · {} hósp.",
+                                            reservation.responsible, reservation.guests
+                                        ),
+                                        Color32::from_rgb(73, 35, 23),
+                                    )
+                                } else {
+                                    match status {
+                                        DayStatus::Bloqueada => {
+                                            ("Bloqueada".to_owned(), Color32::from_rgb(77, 43, 22))
+                                        }
+                                        DayStatus::Ocupada => {
+                                            ("Ocupada".to_owned(), Color32::from_rgb(73, 35, 23))
+                                        }
+                                        DayStatus::Disponivel => (String::new(), PANEL),
                                     }
-                                    DayStatus::Ocupada => {
-                                        ("Ocupada", Color32::from_rgb(73, 35, 23))
-                                    }
-                                    DayStatus::Disponivel => ("", PANEL),
                                 };
                                 let badge_rect = Rect::from_min_max(
                                     Pos2::new(rect.left() + 8.0, rect.bottom() - 23.0),
@@ -1586,6 +1812,7 @@ impl DashboardApp {
                             }
                             if response.clicked() {
                                 self.select_day(day);
+                                self.selected_calendar_day = date;
                             }
                             if cell_index % 7 == 6 {
                                 ui.end_row();
@@ -1593,6 +1820,455 @@ impl DashboardApp {
                         }
                     });
             });
+    }
+
+    fn reservation_day_panel(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.vertical(|ui| {
+                ui.label(
+                    RichText::new("DIA SELECIONADO")
+                        .size(10.0)
+                        .strong()
+                        .color(ORANGE),
+                );
+                ui.label(
+                    RichText::new(format_date_label(&self.selected_calendar_day))
+                        .size(22.0)
+                        .strong()
+                        .color(INK),
+                );
+            });
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if ui
+                    .add_sized(
+                        Vec2::splat(36.0),
+                        egui::Button::new(RichText::new("+").size(22.0).color(INK))
+                            .fill(SURFACE)
+                            .stroke(Stroke::new(1.0, LINE))
+                            .corner_radius(9.0),
+                    )
+                    .clicked()
+                {
+                    self.open_reservation_form(None);
+                }
+            });
+        });
+        let day_reservations: Vec<_> = self
+            .business_data
+            .reservations
+            .iter()
+            .filter(|reservation| {
+                reservation.check_in <= self.selected_calendar_day
+                    && reservation.check_out > self.selected_calendar_day
+            })
+            .filter(|reservation| {
+                self.calendar_chalet_filter == "Todos"
+                    || reservation.chalet == self.calendar_chalet_filter
+            })
+            .cloned()
+            .collect();
+        ui.add_space(4.0);
+        ui.label(
+            RichText::new(format!(
+                "{} reserva(s) ocupando esta data.",
+                day_reservations.len()
+            ))
+            .size(11.0)
+            .color(MUTED),
+        );
+        ui.add_space(8.0);
+        if day_reservations.is_empty() {
+            Frame::new()
+                .fill(SURFACE)
+                .stroke(Stroke::new(1.0, LINE))
+                .corner_radius(12.0)
+                .inner_margin(Margin::symmetric(14, 14))
+                .show(ui, |ui| {
+                    ui.label(
+                        RichText::new("Nenhuma reserva nesta data")
+                            .size(13.0)
+                            .strong()
+                            .color(INK),
+                    );
+                    ui.add_space(4.0);
+                    ui.label(
+                        RichText::new("Crie uma reserva para preencher a agenda.")
+                            .size(11.0)
+                            .color(MUTED),
+                    );
+                    ui.add_space(8.0);
+                    if self.primary_button(ui, "Nova reserva", GREEN) {
+                        self.open_reservation_form(None);
+                    }
+                });
+        }
+        for reservation in day_reservations {
+            Frame::new()
+                .fill(SURFACE)
+                .stroke(Stroke::new(1.0, LINE))
+                .corner_radius(12.0)
+                .inner_margin(Margin::symmetric(12, 10))
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.vertical(|ui| {
+                            ui.label(
+                                RichText::new(&reservation.responsible)
+                                    .size(14.0)
+                                    .strong()
+                                    .color(INK),
+                            );
+                            ui.label(
+                                RichText::new(format!(
+                                    "{} · {} hóspede(s)",
+                                    reservation.chalet, reservation.guests
+                                ))
+                                .size(10.0)
+                                .color(MUTED),
+                            );
+                        });
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            ui.label(
+                                RichText::new(if reservation.reserved {
+                                    "Reservado"
+                                } else {
+                                    "Rascunho"
+                                })
+                                .size(9.0)
+                                .strong()
+                                .color(ORANGE),
+                            );
+                        });
+                    });
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        ui.vertical(|ui| {
+                            ui.label(RichText::new("Entrada").size(9.0).color(MUTED));
+                            ui.label(
+                                RichText::new(format!(
+                                    "{} · {}",
+                                    format_date_label(&reservation.check_in),
+                                    reservation.check_in_time
+                                ))
+                                .size(10.0)
+                                .color(INK),
+                            );
+                        });
+                        ui.add_space(8.0);
+                        ui.vertical(|ui| {
+                            ui.label(RichText::new("Saída").size(9.0).color(MUTED));
+                            ui.label(
+                                RichText::new(format!(
+                                    "{} · {}",
+                                    format_date_label(&reservation.check_out),
+                                    reservation.check_out_time
+                                ))
+                                .size(10.0)
+                                .color(INK),
+                            );
+                        });
+                    });
+                    ui.add_space(7.0);
+                    ui.label(
+                        RichText::new(format!(
+                            "{} documento(s) anexado(s)",
+                            reservation.attachments.len()
+                        ))
+                        .size(10.0)
+                        .color(MUTED),
+                    );
+                    ui.separator();
+                    ui.horizontal(|ui| {
+                        if ui
+                            .button(
+                                RichText::new("Abrir detalhes da reserva →")
+                                    .size(10.0)
+                                    .color(ORANGE),
+                            )
+                            .clicked()
+                        {
+                            self.reservation_details_id = Some(reservation.id.clone());
+                        }
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            if ui
+                                .button(RichText::new("Editar").size(10.0).color(INK))
+                                .clicked()
+                            {
+                                self.open_reservation_form(Some(&reservation));
+                            }
+                        });
+                    });
+                });
+            ui.add_space(8.0);
+        }
+    }
+
+    fn open_reservation_form(&mut self, reservation: Option<&ReservationRecord>) {
+        let (year, month, day) = today_utc();
+        let default_date = if self.selected_calendar_day.is_empty() {
+            date_key(year, month, day)
+        } else {
+            self.selected_calendar_day.clone()
+        };
+        self.editing_reservation_id = reservation.map(|item| item.id.clone());
+        self.reservation_form = if let Some(item) = reservation {
+            ReservationForm {
+                responsible: item.responsible.clone(),
+                chalet: item.chalet.clone(),
+                guests: item.guests.to_string(),
+                check_in: item.check_in.clone(),
+                check_out: item.check_out.clone(),
+                check_in_time: item.check_in_time.clone(),
+                check_out_time: item.check_out_time.clone(),
+                pets: item.pets,
+                breakfast: item.breakfast,
+                decoration: item.decoration,
+                reserved: item.reserved,
+                restrictions: item.restrictions.clone(),
+                notes: item.notes.clone(),
+                attachments: item.attachments.clone(),
+            }
+        } else {
+            ReservationForm {
+                chalet: if self.calendar_chalet_filter != "Todos" {
+                    self.calendar_chalet_filter.clone()
+                } else {
+                    self.preferences
+                        .chalet_names
+                        .first()
+                        .cloned()
+                        .unwrap_or_else(|| "Chalé 01".to_owned())
+                },
+                guests: "2".to_owned(),
+                check_in: default_date,
+                check_out: next_date(&self.selected_calendar_day),
+                check_in_time: "14:00".to_owned(),
+                check_out_time: "11:00".to_owned(),
+                reserved: true,
+                ..ReservationForm::default()
+            }
+        };
+        self.reservation_form_open = true;
+        self.notice = None;
+    }
+
+    fn reservation_windows(&mut self, ctx: &egui::Context) {
+        if self.reservation_form_open {
+            let mut open = self.reservation_form_open;
+            let mut save = false;
+            let mut cancel = false;
+            egui::Window::new(if self.editing_reservation_id.is_some() { "Editar reserva" } else { "Nova reserva" })
+                .id(egui::Id::new("reservation-editor"))
+                .open(&mut open).collapsible(false).resizable(true).default_width(560.0).max_width(700.0)
+                .show(ctx, |ui| {
+                    ui.label(RichText::new("MARQUE UMA NOVA ESTADIA").size(10.0).strong().color(ORANGE));
+                    egui::ScrollArea::vertical().max_height(640.0).show(ui, |ui| {
+                        ui.label("Nome do responsável");
+                        ui.text_edit_singleline(&mut self.reservation_form.responsible);
+                        ui.horizontal(|ui| {
+                            ui.vertical(|ui| {
+                                ui.label("Chalé");
+                                egui::ComboBox::from_id_salt("reservation-form-chalet").selected_text(&self.reservation_form.chalet).show_ui(ui, |ui| {
+                                    for chalet in &self.preferences.chalet_names { ui.selectable_value(&mut self.reservation_form.chalet, chalet.clone(), chalet); }
+                                });
+                            });
+                            ui.vertical(|ui| {
+                                ui.label("Quantidade de pessoas");
+                                ui.add(egui::TextEdit::singleline(&mut self.reservation_form.guests).desired_width(100.0));
+                            });
+                        });
+                        ui.horizontal(|ui| {
+                            ui.vertical(|ui| { ui.label("Entrada · AAAA-MM-DD"); ui.text_edit_singleline(&mut self.reservation_form.check_in); });
+                            ui.vertical(|ui| { ui.label("Saída · AAAA-MM-DD"); ui.text_edit_singleline(&mut self.reservation_form.check_out); });
+                        });
+                        ui.horizontal(|ui| {
+                            ui.vertical(|ui| { ui.label("Horário de entrada"); ui.text_edit_singleline(&mut self.reservation_form.check_in_time); });
+                            ui.vertical(|ui| { ui.label("Horário de saída"); ui.text_edit_singleline(&mut self.reservation_form.check_out_time); });
+                        });
+                        ui.label(RichText::new("A data de saída libera o chalé para uma nova entrada no mesmo dia.").size(10.0).color(MUTED));
+                        ui.horizontal(|ui| {
+                            ui.checkbox(&mut self.reservation_form.pets, "Leva pets");
+                            ui.checkbox(&mut self.reservation_form.breakfast, "Café da manhã");
+                        });
+                        ui.horizontal(|ui| {
+                            ui.checkbox(&mut self.reservation_form.decoration, "Decoração");
+                            ui.checkbox(&mut self.reservation_form.reserved, "Status reservado");
+                        });
+                        ui.label("Intolerâncias ou restrições do café");
+                        ui.text_edit_singleline(&mut self.reservation_form.restrictions);
+                        ui.label("Observações");
+                        ui.add(egui::TextEdit::multiline(&mut self.reservation_form.notes).desired_rows(3));
+                        ui.horizontal(|ui| {
+                            if ui.button("Anexar documentos").clicked() {
+                                if let Some(paths) = rfd::FileDialog::new().pick_files() {
+                                    self.reservation_form.attachments.extend(paths.into_iter().map(|path| path.to_string_lossy().to_string()));
+                                }
+                            }
+                            ui.label(RichText::new(format!("{} arquivo(s)", self.reservation_form.attachments.len())).size(10.0).color(MUTED));
+                        });
+                        for path in &self.reservation_form.attachments { ui.label(RichText::new(file_name(path)).size(9.0).color(MUTED)); }
+                        if let Some(error) = &self.notice { ui.label(RichText::new(error).size(10.0).color(RED)); }
+                        ui.horizontal(|ui| {
+                            if ui.button("Cancelar").clicked() { cancel = true; }
+                            if ui.add_enabled(!self.reservation_form.responsible.trim().is_empty(), egui::Button::new("Salvar e marcar no calendário").fill(GREEN).corner_radius(9.0)).clicked() { save = true; }
+                        });
+                    });
+                });
+            self.reservation_form_open = open && !cancel;
+            if save {
+                self.save_reservation_record();
+            }
+        }
+
+        if let Some(id) = self.reservation_details_id.clone() {
+            let reservation = self
+                .business_data
+                .reservations
+                .iter()
+                .find(|item| item.id == id)
+                .cloned();
+            let mut open = reservation.is_some();
+            let mut edit = false;
+            egui::Window::new("Detalhes da reserva")
+                .id(egui::Id::new("reservation-details"))
+                .open(&mut open)
+                .collapsible(false)
+                .resizable(true)
+                .default_width(500.0)
+                .show(ctx, |ui| {
+                    if let Some(item) = &reservation {
+                        ui.heading(&item.responsible);
+                        ui.label(format!(
+                            "{} · {} hóspede(s) · {}",
+                            item.chalet,
+                            item.guests,
+                            if item.reserved {
+                                "Reservado"
+                            } else {
+                                "Rascunho"
+                            }
+                        ));
+                        ui.separator();
+                        ui.label(format!(
+                            "Entrada: {} às {}",
+                            format_date_label(&item.check_in),
+                            item.check_in_time
+                        ));
+                        ui.label(format!(
+                            "Saída: {} às {}",
+                            format_date_label(&item.check_out),
+                            item.check_out_time
+                        ));
+                        ui.label(format!(
+                            "Pets: {} · Café: {} · Decoração: {}",
+                            yes_no(item.pets),
+                            yes_no(item.breakfast),
+                            yes_no(item.decoration)
+                        ));
+                        ui.label(format!("Restrições: {}", empty_as_dash(&item.restrictions)));
+                        ui.label(format!("Observações: {}", empty_as_dash(&item.notes)));
+                        ui.separator();
+                        ui.label(
+                            RichText::new(format!(
+                                "Documentos anexados ({})",
+                                item.attachments.len()
+                            ))
+                            .strong(),
+                        );
+                        for path in &item.attachments {
+                            if ui.link(file_name(path)).clicked() {
+                                let _ = open::that(path);
+                            }
+                        }
+                        if ui.button("Editar reserva").clicked() {
+                            edit = true;
+                        }
+                    }
+                });
+            if !open {
+                self.reservation_details_id = None;
+            }
+            if edit {
+                if let Some(item) = reservation.as_ref() {
+                    self.open_reservation_form(Some(item));
+                }
+                self.reservation_details_id = None;
+            }
+        }
+    }
+
+    fn save_reservation_record(&mut self) {
+        let form = &self.reservation_form;
+        let guests = form
+            .guests
+            .trim()
+            .parse::<u32>()
+            .ok()
+            .filter(|value| *value > 0);
+        if form.responsible.trim().is_empty() || form.chalet.trim().is_empty() || guests.is_none() {
+            self.notice =
+                Some("Preencha o responsável, o chalé e a quantidade de hóspedes.".to_owned());
+            return;
+        }
+        if !valid_iso_date(&form.check_in)
+            || !valid_iso_date(&form.check_out)
+            || form.check_out <= form.check_in
+        {
+            self.notice = Some("Informe datas válidas e uma saída depois da entrada.".to_owned());
+            return;
+        }
+        let editing_id = self.editing_reservation_id.as_deref();
+        let overlaps = self.business_data.reservations.iter().any(|existing| {
+            existing.reserved
+                && Some(existing.id.as_str()) != editing_id
+                && existing.chalet == form.chalet
+                && form.check_in < existing.check_out
+                && existing.check_in < form.check_out
+        });
+        if form.reserved && overlaps {
+            self.notice =
+                Some("Este chalé já tem uma reserva nesse intervalo de datas.".to_owned());
+            return;
+        }
+        let reservation = ReservationRecord {
+            id: self
+                .editing_reservation_id
+                .clone()
+                .unwrap_or_else(new_record_id),
+            responsible: form.responsible.trim().to_owned(),
+            chalet: form.chalet.clone(),
+            guests: guests.unwrap_or(1),
+            check_in: form.check_in.clone(),
+            check_out: form.check_out.clone(),
+            check_in_time: form.check_in_time.clone(),
+            check_out_time: form.check_out_time.clone(),
+            pets: form.pets,
+            breakfast: form.breakfast,
+            decoration: form.decoration,
+            reserved: form.reserved,
+            restrictions: form.restrictions.trim().to_owned(),
+            notes: form.notes.trim().to_owned(),
+            attachments: form.attachments.clone(),
+        };
+        if let Some(existing) = self
+            .business_data
+            .reservations
+            .iter_mut()
+            .find(|item| item.id == reservation.id)
+        {
+            *existing = reservation.clone();
+        } else {
+            self.business_data.reservations.push(reservation.clone());
+        }
+        self.selected_calendar_day = reservation.check_in.clone();
+        if let Some((year, month, day)) = parse_iso_date(&reservation.check_in) {
+            self.year = year;
+            self.month = month;
+            self.select_day(day);
+        }
+        self.reservation_form_open = false;
+        self.editing_reservation_id = None;
+        self.notice = Some("Reserva salva e marcada no calendário.".to_owned());
+        self.persist_business_data();
     }
 
     fn reservation_metric(
@@ -1637,124 +2313,381 @@ impl DashboardApp {
     }
 
     fn show_financas(&mut self, ui: &mut egui::Ui) {
-        egui::ScrollArea::vertical()
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                ui.add_space(24.0);
+        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+            ui.add_space(14.0);
+            if self.section == Section::Financas {
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("Finanças").size(34.0).strong().color(INK));
-                    ui.add_space(16.0);
-                    egui::ComboBox::from_id_salt("finance-month")
-                        .selected_text(month_name(self.finance_month as u32))
-                        .width(148.0)
-                        .show_ui(ui, |ui| {
-                            for month in 1..=12 {
-                                ui.selectable_value(
-                                    &mut self.finance_month,
-                                    month,
-                                    month_name(month as u32),
-                                );
-                            }
-                        });
+                    if ui.selectable_label(false, "Visão geral").clicked() {
+                        self.section = Section::Reservas;
+                        self.reservation_tab = ReservationTab::Overview;
+                    }
+                    ui.add_space(8.0);
+                    let _ = ui.selectable_label(true, RichText::new("Financeiro").strong());
                 });
-                ui.add_space(18.0);
-                let metric_gaps = ui.spacing().item_spacing.x * 2.0 + 14.0 * 2.0;
-                let metric_width = ((ui.available_width() - metric_gaps) / 3.0).max(210.0);
-                ui.horizontal(|ui| {
-                    self.metric_card(ui, "Saldo do mês", "R$ 8.420,00", "", INK, metric_width);
-                    ui.add_space(14.0);
-                    self.metric_card(
-                        ui,
-                        "Receitas",
-                        "R$ 12.380,00",
-                        "Hospedagem e vendas",
-                        GREEN,
-                        metric_width,
-                    );
-                    ui.add_space(14.0);
-                    self.metric_card(
-                        ui,
-                        "Despesas",
-                        "R$ 3.960,00",
-                        "Custos operacionais",
-                        ORANGE,
-                        metric_width,
-                    );
+                ui.add_space(8.0);
+            }
+            ui.horizontal(|ui| {
+                ui.vertical(|ui| {
+                    ui.label(RichText::new("CONTROLE FINANCEIRO").size(10.0).strong().color(ORANGE));
+                    ui.label(RichText::new("Entradas e saídas").size(28.0).strong().color(INK));
+                    ui.label(RichText::new("Registre tudo que entrou ou saiu e acompanhe o saldo automaticamente.").size(12.0).color(MUTED));
                 });
-                ui.add_space(26.0);
-                ui.horizontal(|ui| {
-                    ui.label(
-                        RichText::new("Movimentações")
-                            .size(23.0)
-                            .strong()
-                            .color(INK),
-                    );
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        egui::ComboBox::from_id_salt("finance-filter")
-                            .selected_text(&self.finance_filter)
-                            .show_ui(ui, |ui| {
-                                ui.selectable_value(
-                                    &mut self.finance_filter,
-                                    "Todas".to_owned(),
-                                    "Todas",
-                                );
-                                ui.selectable_value(
-                                    &mut self.finance_filter,
-                                    "Receitas".to_owned(),
-                                    "Receitas",
-                                );
-                                ui.selectable_value(
-                                    &mut self.finance_filter,
-                                    "Despesas".to_owned(),
-                                    "Despesas",
-                                );
-                            });
-                    });
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if self.finance_tab == FinanceTab::Movements {
+                        if ui.add_sized(Vec2::new(150.0, 38.0), egui::Button::new("+ Novo lançamento").fill(GREEN).corner_radius(10.0)).clicked() { self.open_movement_form(); }
+                    } else if ui.add_sized(Vec2::new(130.0, 38.0), egui::Button::new("+ Nova conta").fill(GREEN).corner_radius(10.0)).clicked() { self.open_payable_form(); }
                 });
-                ui.add_space(12.0);
-                Frame::new()
-                    .fill(SURFACE)
-                    .stroke(Stroke::new(1.0, Color32::WHITE))
-                    .corner_radius(18)
-                    .inner_margin(Margin::symmetric(16, 8))
-                    .show(ui, |ui| {
-                        if self.finance_filter != "Despesas" {
-                            self.finance_row(
-                                ui,
-                                Icon::BedDouble,
-                                GREEN_PALE,
-                                "Hospedagem",
-                                "Chalé 01 · 19 de fevereiro",
-                                "R$ 7.920,00",
-                                true,
-                            );
-                            ui.separator();
-                        }
-                        if self.finance_filter != "Receitas" {
-                            self.finance_row(
-                                ui,
-                                Icon::BrushCleaning,
-                                ORANGE_PALE,
-                                "Limpeza",
-                                "Serviço · 21 de fevereiro",
-                                "R$ 240,00",
-                                false,
-                            );
-                            ui.separator();
-                        }
-                        if self.finance_filter != "Despesas" {
-                            self.finance_row(
-                                ui,
-                                Icon::Wine,
-                                GREEN_PALE,
-                                "Adega",
-                                "Venda de produtos · 22 de fevereiro",
-                                "R$ 460,00",
-                                true,
-                            );
-                        }
-                    });
             });
+            ui.add_space(12.0);
+            ui.horizontal(|ui| {
+                for (tab, label) in [(FinanceTab::Movements, "Movimentações"), (FinanceTab::Payables, "Contas a pagar")] {
+                    let selected = self.finance_tab == tab;
+                    if ui.add(egui::Button::new(RichText::new(label).size(11.0).strong().color(if selected { INK } else { MUTED })).fill(if selected { ORANGE_PALE } else { SURFACE }).stroke(Stroke::new(1.0, LINE)).corner_radius(9.0)).clicked() { self.finance_tab = tab; }
+                }
+            });
+            ui.add_space(12.0);
+            if self.finance_tab == FinanceTab::Movements {
+                let month_prefix = format!("{:04}-{:02}", self.finance_year, self.finance_month);
+                let incoming: u64 = self.business_data.movements.iter().filter(|item| item.kind == "Entrada" && item.date.starts_with(&month_prefix)).map(|item| item.amount_cents).sum();
+                let outgoing: u64 = self.business_data.movements.iter().filter(|item| item.kind == "Saída" && item.date.starts_with(&month_prefix)).map(|item| item.amount_cents).sum();
+                let all_incoming: u64 = self.business_data.movements.iter().filter(|item| item.kind == "Entrada").map(|item| item.amount_cents).sum();
+                let balance = all_incoming as i64 - self.business_data.movements.iter().filter(|item| item.kind == "Saída").map(|item| item.amount_cents as i64).sum::<i64>();
+                let gap = 10.0;
+                let card_width = ((ui.available_width() - gap * 3.0) / 4.0).max(150.0);
+                ui.horizontal(|ui| {
+                    self.metric_card(ui, "Saldo total", &format_brl_signed(balance), "entradas menos saídas", INK, card_width); ui.add_space(gap);
+                    self.metric_card(ui, "Entradas totais", &format_brl(all_incoming), "todo o período", GREEN_MID, card_width); ui.add_space(gap);
+                    self.metric_card(ui, "Entradas no mês", &format_brl(incoming), &format!("{}/{}", self.finance_month, self.finance_year), GREEN_MID, card_width); ui.add_space(gap);
+                    self.metric_card(ui, "Saídas no mês", &format_brl(outgoing), &format!("{}/{}", self.finance_month, self.finance_year), RED, card_width);
+                });
+                ui.add_space(14.0);
+                Frame::new().fill(SURFACE).stroke(Stroke::new(1.0, LINE)).corner_radius(14.0).inner_margin(Margin::symmetric(14, 10)).show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.vertical(|ui| { ui.label(RichText::new("Movimentações").size(18.0).strong().color(INK)); ui.label(RichText::new("Entradas e saídas registradas.").size(10.0).color(MUTED)); });
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            egui::ComboBox::from_id_salt("finance-year-filter").selected_text(self.finance_year.to_string()).show_ui(ui, |ui| { for year in self.finance_year-3..=self.finance_year+3 { ui.selectable_value(&mut self.finance_year, year, year.to_string()); }});
+                            egui::ComboBox::from_id_salt("finance-month-filter").selected_text(format!("{} de {}", month_name(self.finance_month as u32).to_lowercase(), self.finance_year)).show_ui(ui, |ui| { for month in 1..=12 { ui.selectable_value(&mut self.finance_month, month, month_name(month as u32)); }});
+                        });
+                    });
+                    ui.add_space(8.0);
+                    ui.horizontal_wrapped(|ui| { for &method in payment_methods() { let selected = self.movement_method_filter == method; if ui.selectable_label(selected, method).clicked() { self.movement_method_filter = method.to_owned(); } }});
+                    ui.separator();
+                    let entries: Vec<_> = self.business_data.movements.iter().filter(|item| item.date.starts_with(&month_prefix)).filter(|item| self.movement_method_filter == "Todas" || item.payment_method == self.movement_method_filter).cloned().collect();
+                    if entries.is_empty() { ui.centered_and_justified(|ui| { ui.label(RichText::new("Nenhum lançamento encontrado neste período.").size(12.0).color(MUTED)); }); }
+                    for entry in entries.iter().rev() {
+                        ui.horizontal(|ui| {
+                            ui.vertical(|ui| { ui.label(RichText::new(&entry.description).size(12.0).strong().color(INK)); ui.label(RichText::new(format!("{} · {} · {} · {}", format_date_label(&entry.date), entry.payment_method, entry.category, empty_as_dash(&entry.notes))).size(9.0).color(MUTED)); });
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| { let is_income = entry.kind == "Entrada"; ui.label(RichText::new(format!("{} {}", if is_income { "+" } else { "−" }, format_brl(entry.amount_cents))).size(13.0).strong().color(if is_income { GREEN_MID } else { RED })); });
+                        });
+                        ui.separator();
+                    }
+                });
+            } else {
+                let today = date_key(today_utc().0, today_utc().1, today_utc().2);
+                let open_total: u64 = self.business_data.payables.iter().filter(|account| !account.paid).map(|account| account.amount_cents).sum();
+                let overdue = self.business_data.payables.iter().filter(|account| !account.paid && account.due_date < today).count();
+                let upcoming = self.business_data.payables.iter().filter(|account| !account.paid && account.due_date >= today && account.due_date <= add_days(&today, 7)).count();
+                let paid_count = self.business_data.payables.iter().filter(|account| account.paid).count();
+                let gap = 10.0;
+                let card_width = ((ui.available_width() - gap * 3.0) / 4.0).max(150.0);
+                ui.horizontal(|ui| {
+                    self.metric_card(ui, "Total em aberto", &format_brl(open_total), "contas pendentes", INK, card_width); ui.add_space(gap);
+                    self.metric_card(ui, "Vencidas", &overdue.to_string(), "pedem atenção", RED, card_width); ui.add_space(gap);
+                    self.metric_card(ui, "Próximas do vencimento", &upcoming.to_string(), "nos próximos 7 dias", ORANGE, card_width); ui.add_space(gap);
+                    self.metric_card(ui, "Contas pagas", &paid_count.to_string(), "contas quitadas", GREEN_MID, card_width);
+                });
+                ui.add_space(14.0);
+                Frame::new().fill(SURFACE).stroke(Stroke::new(1.0, LINE)).corner_radius(14.0).inner_margin(Margin::symmetric(14, 10)).show(ui, |ui| {
+                    ui.horizontal(|ui| { ui.vertical(|ui| { ui.label(RichText::new("Contas cadastradas").size(18.0).strong().color(INK)); ui.label(RichText::new("Produtos, serviços, parcelas e vencimentos.").size(10.0).color(MUTED)); }); });
+                    ui.add_space(8.0);
+                    ui.horizontal_wrapped(|ui| { for filter in ["Todas", "Em aberto", "Alertas", "Pagas"] { if ui.selectable_label(self.finance_filter == filter, filter).clicked() { self.finance_filter = filter.to_owned(); } }});
+                    ui.separator();
+                    let accounts: Vec<_> = self.business_data.payables.iter().filter(|account| match self.finance_filter.as_str() { "Em aberto" => !account.paid, "Alertas" => !account.paid && account.due_date < today, "Pagas" => account.paid, _ => true }).cloned().collect();
+                    if accounts.is_empty() { ui.centered_and_justified(|ui| { ui.label(RichText::new("Nenhuma conta encontrada. Cadastre uma conta para acompanhar vencimentos.").size(11.0).color(MUTED)); }); }
+                    for account in accounts.iter().rev() {
+                        ui.horizontal(|ui| {
+                            ui.vertical(|ui| { ui.label(RichText::new(&account.description).size(12.0).strong().color(INK)); ui.label(RichText::new(format!("{} · {} · vencimento {} · parcelas {}", empty_as_dash(&account.supplier), account.category, format_date_label(&account.due_date), empty_as_dash(&account.installments))).size(9.0).color(MUTED)); });
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                ui.label(RichText::new(if account.paid { "Paga" } else if account.due_date < today { "Vencida" } else { "Em aberto" }).size(10.0).strong().color(if account.paid { GREEN_MID } else if account.due_date < today { RED } else { ORANGE }));
+                                ui.label(RichText::new(format_brl(account.amount_cents)).size(12.0).strong().color(INK));
+                                if !account.paid && ui.small_button("Marcar paga").clicked() { if let Some(saved) = self.business_data.payables.iter_mut().find(|item| item.id == account.id) { saved.paid = true; } self.persist_business_data(); }
+                            });
+                        });
+                        ui.separator();
+                    }
+                });
+            }
+        });
+        self.finance_windows(ui.ctx());
+    }
+
+    fn open_movement_form(&mut self) {
+        let (year, month, day) = today_utc();
+        self.movement_form = MovementForm {
+            kind: "Entrada".to_owned(),
+            date: date_key(year, month, day),
+            payment_method: "PIX".to_owned(),
+            category: "Hospedagem".to_owned(),
+            ..MovementForm::default()
+        };
+        self.movement_form_open = true;
+        self.notice = None;
+    }
+
+    fn open_payable_form(&mut self) {
+        let (year, month, day) = today_utc();
+        self.payable_form = PayableForm {
+            due_date: date_key(year, month, day),
+            category: "Hospedagem".to_owned(),
+            installments: "1/1".to_owned(),
+            ..PayableForm::default()
+        };
+        self.payable_form_open = true;
+        self.notice = None;
+    }
+
+    fn finance_windows(&mut self, ctx: &egui::Context) {
+        if self.movement_form_open {
+            let mut open = self.movement_form_open;
+            let mut save = false;
+            let mut cancel = false;
+            egui::Window::new("Novo lançamento")
+                .id(egui::Id::new("movement-editor"))
+                .open(&mut open)
+                .collapsible(false)
+                .resizable(false)
+                .default_width(470.0)
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        for kind in ["Entrada", "Saída"] {
+                            if ui
+                                .selectable_label(self.movement_form.kind == kind, kind)
+                                .clicked()
+                            {
+                                self.movement_form.kind = kind.to_owned();
+                            }
+                        }
+                    });
+                    ui.label(if self.movement_form.kind == "Entrada" {
+                        "O que gerou esta entrada?"
+                    } else {
+                        "Como e onde você gastou?"
+                    });
+                    ui.text_edit_singleline(&mut self.movement_form.description);
+                    ui.horizontal(|ui| {
+                        ui.vertical(|ui| {
+                            ui.label("Valor");
+                            ui.text_edit_singleline(&mut self.movement_form.amount);
+                        });
+                        ui.vertical(|ui| {
+                            ui.label("Data · AAAA-MM-DD");
+                            ui.text_edit_singleline(&mut self.movement_form.date);
+                        });
+                    });
+                    ui.horizontal(|ui| {
+                        ui.vertical(|ui| {
+                            ui.label("Forma / conta");
+                            egui::ComboBox::from_id_salt("movement-method")
+                                .selected_text(&self.movement_form.payment_method)
+                                .show_ui(ui, |ui| {
+                                    for &method in
+                                        payment_methods().iter().filter(|m| **m != "Todas")
+                                    {
+                                        ui.selectable_value(
+                                            &mut self.movement_form.payment_method,
+                                            method.to_owned(),
+                                            method,
+                                        );
+                                    }
+                                });
+                        });
+                        ui.vertical(|ui| {
+                            ui.label("Categoria");
+                            egui::ComboBox::from_id_salt("movement-category")
+                                .selected_text(&self.movement_form.category)
+                                .show_ui(ui, |ui| {
+                                    for category in movement_categories() {
+                                        ui.selectable_value(
+                                            &mut self.movement_form.category,
+                                            category.to_string(),
+                                            *category,
+                                        );
+                                    }
+                                });
+                        });
+                    });
+                    ui.label("Observações");
+                    ui.add(
+                        egui::TextEdit::multiline(&mut self.movement_form.notes).desired_rows(3),
+                    );
+                    ui.horizontal(|ui| {
+                        if ui.button("Cancelar").clicked() {
+                            cancel = true;
+                        }
+                        if ui
+                            .add_enabled(
+                                !self.movement_form.description.trim().is_empty()
+                                    && parse_brl_cents(&self.movement_form.amount).is_some(),
+                                egui::Button::new("Salvar lançamento")
+                                    .fill(GREEN)
+                                    .corner_radius(8.0),
+                            )
+                            .clicked()
+                        {
+                            save = true;
+                        }
+                    });
+                    if let Some(error) = &self.notice {
+                        ui.label(RichText::new(error).size(10.0).color(RED));
+                    }
+                });
+            self.movement_form_open = open && !cancel;
+            if save {
+                self.save_movement_record();
+            }
+        }
+        if self.payable_form_open {
+            let mut open = self.payable_form_open;
+            let mut save = false;
+            let mut cancel = false;
+            egui::Window::new("Nova conta a pagar")
+                .id(egui::Id::new("payable-editor"))
+                .open(&mut open)
+                .collapsible(false)
+                .resizable(false)
+                .default_width(470.0)
+                .show(ctx, |ui| {
+                    ui.label("Produto ou serviço");
+                    ui.text_edit_singleline(&mut self.payable_form.description);
+                    ui.label("Fornecedor / responsável");
+                    ui.text_edit_singleline(&mut self.payable_form.supplier);
+                    ui.horizontal(|ui| {
+                        ui.vertical(|ui| {
+                            ui.label("Valor total");
+                            ui.text_edit_singleline(&mut self.payable_form.amount);
+                        });
+                        ui.vertical(|ui| {
+                            ui.label("Vencimento · AAAA-MM-DD");
+                            ui.text_edit_singleline(&mut self.payable_form.due_date);
+                        });
+                    });
+                    ui.horizontal(|ui| {
+                        ui.vertical(|ui| {
+                            ui.label("Categoria");
+                            egui::ComboBox::from_id_salt("payable-category")
+                                .selected_text(&self.payable_form.category)
+                                .show_ui(ui, |ui| {
+                                    for category in payable_categories() {
+                                        ui.selectable_value(
+                                            &mut self.payable_form.category,
+                                            category.to_string(),
+                                            *category,
+                                        );
+                                    }
+                                });
+                        });
+                        ui.vertical(|ui| {
+                            ui.label("Parcela (ex.: 1/3)");
+                            ui.text_edit_singleline(&mut self.payable_form.installments);
+                        });
+                    });
+                    ui.label("Observações");
+                    ui.add(egui::TextEdit::multiline(&mut self.payable_form.notes).desired_rows(3));
+                    ui.horizontal(|ui| {
+                        if ui.button("Cancelar").clicked() {
+                            cancel = true;
+                        }
+                        if ui
+                            .add_enabled(
+                                !self.payable_form.description.trim().is_empty()
+                                    && parse_brl_cents(&self.payable_form.amount).is_some(),
+                                egui::Button::new("Salvar conta")
+                                    .fill(GREEN)
+                                    .corner_radius(8.0),
+                            )
+                            .clicked()
+                        {
+                            save = true;
+                        }
+                    });
+                    if let Some(error) = &self.notice {
+                        ui.label(RichText::new(error).size(10.0).color(RED));
+                    }
+                });
+            self.payable_form_open = open && !cancel;
+            if save {
+                self.save_payable_record();
+            }
+        }
+    }
+
+    fn save_movement_record(&mut self) {
+        let Some(amount_cents) = parse_brl_cents(&self.movement_form.amount) else {
+            self.notice = Some("Informe um valor válido.".to_owned());
+            return;
+        };
+        if !valid_iso_date(&self.movement_form.date) {
+            self.notice = Some("Informe uma data válida no formato AAAA-MM-DD.".to_owned());
+            return;
+        }
+        self.business_data.movements.push(FinancialMovement {
+            id: new_record_id(),
+            kind: self.movement_form.kind.clone(),
+            description: self.movement_form.description.trim().to_owned(),
+            amount_cents,
+            date: self.movement_form.date.clone(),
+            payment_method: self.movement_form.payment_method.clone(),
+            category: self.movement_form.category.clone(),
+            notes: self.movement_form.notes.trim().to_owned(),
+        });
+        self.movement_form_open = false;
+        self.notice = Some("Lançamento salvo.".to_owned());
+        self.persist_business_data();
+    }
+
+    fn save_payable_record(&mut self) {
+        let Some(amount_cents) = parse_brl_cents(&self.payable_form.amount) else {
+            self.notice = Some("Informe um valor válido.".to_owned());
+            return;
+        };
+        if !valid_iso_date(&self.payable_form.due_date) {
+            self.notice = Some("Informe uma data de vencimento válida.".to_owned());
+            return;
+        }
+        self.business_data.payables.push(PayableAccount {
+            id: new_record_id(),
+            description: self.payable_form.description.trim().to_owned(),
+            supplier: self.payable_form.supplier.trim().to_owned(),
+            amount_cents,
+            due_date: self.payable_form.due_date.clone(),
+            category: self.payable_form.category.clone(),
+            installments: self.payable_form.installments.trim().to_owned(),
+            paid: false,
+            notes: self.payable_form.notes.trim().to_owned(),
+        });
+        self.payable_form_open = false;
+        self.notice = Some("Conta cadastrada para acompanhamento.".to_owned());
+        self.persist_business_data();
+    }
+
+    fn persist_business_data(&mut self) {
+        if let Some(path) = &self.business_path {
+            if let Some(parent) = path.parent() {
+                let _ = fs::create_dir_all(parent);
+            }
+            match serde_json::to_vec_pretty(&self.business_data)
+                .and_then(|bytes| fs::write(path, bytes).map_err(serde_json::Error::io))
+            {
+                Ok(()) => {}
+                Err(_) => {
+                    self.notice =
+                        Some("Não foi possível gravar os dados neste computador.".to_owned())
+                }
+            }
+        } else {
+            self.notice =
+                Some("Não foi possível localizar a pasta de dados do aplicativo.".to_owned());
+        }
     }
 
     fn show_settings(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
@@ -3103,6 +4036,7 @@ impl DashboardApp {
     }
 
     fn select_day(&mut self, day: u32) {
+        self.selected_calendar_day = date_key(self.year, self.month, day);
         self.selected_range = match self.selected_range {
             Some((start, end)) if start != end => Some((day, day)),
             Some((start, _)) => Some((start.min(day), start.max(day))),
@@ -3198,6 +4132,7 @@ impl DashboardApp {
             self.month -= 1;
         }
         self.selected_range = None;
+        self.selected_calendar_day = date_key(self.year, self.month, 1);
     }
 
     fn next_month(&mut self) {
@@ -3208,6 +4143,7 @@ impl DashboardApp {
             self.month += 1;
         }
         self.selected_range = None;
+        self.selected_calendar_day = date_key(self.year, self.month, 1);
     }
 
     fn advance_profile_animation(&mut self, ctx: &egui::Context) {
@@ -3296,6 +4232,21 @@ fn load_availability() -> (HashSet<String>, Option<PathBuf>) {
         .map(str::to_owned)
         .collect();
     (blocked, Some(path))
+}
+
+fn load_business_data() -> (BusinessData, Option<PathBuf>) {
+    let Some(project_dirs) = directories::ProjectDirs::from("br", "Matto Chales", "Matto Chales")
+    else {
+        return (BusinessData::default(), None);
+    };
+    let path = project_dirs
+        .data_local_dir()
+        .join("gestao-reservas-financeiro.json");
+    let data = fs::read(&path)
+        .ok()
+        .and_then(|contents| serde_json::from_slice(&contents).ok())
+        .unwrap_or_default();
+    (data, Some(path))
 }
 
 fn load_preferences() -> (AppPreferences, Option<PathBuf>) {
@@ -3481,4 +4432,196 @@ fn weekday_monday(year: i32, month: u32) -> usize {
     let j = y / 100;
     let saturday_zero = (1 + (13 * (m + 1)) / 5 + k + k / 4 + j / 4 + 5 * j) % 7;
     ((saturday_zero + 5) % 7) as usize
+}
+
+fn parse_iso_date(value: &str) -> Option<(i32, u32, u32)> {
+    let mut parts = value.split('-');
+    let year = parts.next()?.parse::<i32>().ok()?;
+    let month = parts.next()?.parse::<u32>().ok()?;
+    let day = parts.next()?.parse::<u32>().ok()?;
+    if parts.next().is_some()
+        || month == 0
+        || month > 12
+        || day == 0
+        || day > days_in_month(year, month)
+    {
+        return None;
+    }
+    Some((year, month, day))
+}
+
+fn valid_iso_date(value: &str) -> bool {
+    value.len() == 10 && parse_iso_date(value).is_some()
+}
+
+fn add_days(value: &str, count: u32) -> String {
+    let Some((mut year, mut month, mut day)) = parse_iso_date(value) else {
+        return value.to_owned();
+    };
+    for _ in 0..count {
+        day += 1;
+        if day > days_in_month(year, month) {
+            day = 1;
+            month += 1;
+            if month > 12 {
+                month = 1;
+                year += 1;
+            }
+        }
+    }
+    date_key(year, month, day)
+}
+
+fn next_date(value: &str) -> String {
+    add_days(value, 1)
+}
+
+fn format_date_label(value: &str) -> String {
+    match parse_iso_date(value) {
+        Some((_, month, day)) => format!("{day} de {}", month_name(month).to_lowercase()),
+        None => value.to_owned(),
+    }
+}
+
+fn new_record_id() -> String {
+    let millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    format!("{millis}-{}", std::process::id())
+}
+
+fn payment_methods() -> &'static [&'static str] {
+    &[
+        "Todas",
+        "Dinheiro",
+        "PIX",
+        "Cartão de crédito",
+        "Cartão de débito",
+        "Transferência",
+        "Conta bancária",
+        "Cheque",
+        "Boleto",
+        "Outro",
+    ]
+}
+
+fn movement_categories() -> &'static [&'static str] {
+    &[
+        "Hospedagem",
+        "Café da manhã",
+        "Adega",
+        "Limpeza",
+        "Manutenção",
+        "Decoração",
+        "Impostos",
+        "Pagamento",
+        "Outros",
+    ]
+}
+
+fn payable_categories() -> &'static [&'static str] {
+    &[
+        "Hospedagem",
+        "Café da manhã",
+        "Decoração",
+        "Manutenção",
+        "Limpeza",
+        "Compras",
+        "Energia",
+        "Internet",
+        "Impostos",
+        "Pagamento",
+        "Outro",
+    ]
+}
+
+fn parse_brl_cents(value: &str) -> Option<u64> {
+    let raw = value.trim().replace("R$", "").replace(' ', "");
+    if raw.is_empty() || raw.starts_with('-') {
+        return None;
+    }
+    let (whole, fraction) = if let Some((whole, fraction)) = raw.rsplit_once(',') {
+        (
+            whole
+                .chars()
+                .filter(char::is_ascii_digit)
+                .collect::<String>(),
+            fraction
+                .chars()
+                .filter(char::is_ascii_digit)
+                .take(2)
+                .collect::<String>(),
+        )
+    } else if let Some(index) = raw.rfind('.') {
+        let decimals = raw.len().saturating_sub(index + 1);
+        if decimals > 0 && decimals <= 2 {
+            (
+                raw[..index]
+                    .chars()
+                    .filter(char::is_ascii_digit)
+                    .collect::<String>(),
+                raw[index + 1..]
+                    .chars()
+                    .filter(char::is_ascii_digit)
+                    .collect::<String>(),
+            )
+        } else {
+            (
+                raw.chars().filter(char::is_ascii_digit).collect::<String>(),
+                String::new(),
+            )
+        }
+    } else {
+        (
+            raw.chars().filter(char::is_ascii_digit).collect::<String>(),
+            String::new(),
+        )
+    };
+    if whole.is_empty() {
+        return None;
+    }
+    let reais = whole.parse::<u64>().ok()?;
+    let centavos = match fraction.len() {
+        0 => 0,
+        1 => fraction.parse::<u64>().ok()? * 10,
+        _ => fraction[..2].parse::<u64>().ok()?,
+    };
+    reais.checked_mul(100)?.checked_add(centavos)
+}
+
+fn format_brl(cents: u64) -> String {
+    let reais = cents / 100;
+    let mut digits = reais.to_string();
+    let mut grouped = String::new();
+    while digits.len() > 3 {
+        let tail = digits.split_off(digits.len() - 3);
+        grouped = format!(".{tail}{grouped}");
+    }
+    grouped = format!("{digits}{grouped}");
+    format!("R$ {grouped},{:02}", cents % 100)
+}
+
+fn format_brl_signed(cents: i64) -> String {
+    if cents < 0 {
+        format!("−{}", format_brl(cents.unsigned_abs()))
+    } else {
+        format_brl(cents as u64)
+    }
+}
+
+fn file_name(path: &str) -> &str {
+    path.rsplit(['\\', '/']).next().unwrap_or(path)
+}
+
+fn yes_no(value: bool) -> &'static str {
+    if value { "Sim" } else { "Não" }
+}
+
+fn empty_as_dash(value: &str) -> &str {
+    if value.trim().is_empty() {
+        "—"
+    } else {
+        value
+    }
 }
