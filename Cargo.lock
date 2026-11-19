@@ -1898,13 +1898,14 @@ dependencies = [
  "eframe",
  "image",
  "open",
- "ring",
  "reqwest",
  "resvg",
  "rfd",
+ "ring",
  "serde",
  "serde_json",
  "urlencoding",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

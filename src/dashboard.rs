@@ -256,6 +256,8 @@ pub struct DashboardApp {
     movement_method_filter: String,
     finance_tab: FinanceTab,
     reservation_form_open: bool,
+    pending_modal_backdrop: Option<image::RgbaImage>,
+    modal_backdrop_texture: Option<TextureHandle>,
     reservation_form: ReservationForm,
     editing_reservation_id: Option<String>,
     reservation_details_id: Option<String>,
@@ -383,6 +385,8 @@ impl DashboardApp {
             movement_method_filter: "Todas".to_owned(),
             finance_tab: FinanceTab::Movements,
             reservation_form_open: false,
+            pending_modal_backdrop: None,
+            modal_backdrop_texture: None,
             reservation_form: ReservationForm::default(),
             editing_reservation_id: None,
             reservation_details_id: None,
@@ -2033,6 +2037,8 @@ impl DashboardApp {
                 ..ReservationForm::default()
             }
         };
+        self.pending_modal_backdrop = capture_blurred_backdrop();
+        self.modal_backdrop_texture = None;
         self.reservation_form_open = true;
         self.notice = None;
     }
@@ -4151,6 +4157,37 @@ impl eframe::App for DashboardApp {
         self.last_context = ctx.clone();
         self.advance_profile_animation(&ctx);
         self.handle_events(&ctx);
+        if self.reservation_form_open && self.modal_backdrop_texture.is_none() {
+            if let Some(backdrop) = self.pending_modal_backdrop.take() {
+                let size = [backdrop.width() as usize, backdrop.height() as usize];
+                self.modal_backdrop_texture = Some(ctx.load_texture(
+                    "reservation-modal-blurred-backdrop",
+                    egui::ColorImage::from_rgba_unmultiplied(size, backdrop.as_raw()),
+                    egui::TextureOptions::LINEAR,
+                ));
+            }
+        }
+        if self.reservation_form_open && self.modal_backdrop_texture.is_some() {
+            let bounds = root.max_rect();
+            let texture = self.modal_backdrop_texture.as_ref().unwrap();
+            root.painter().image(
+                texture.id(),
+                bounds,
+                Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+                Color32::WHITE,
+            );
+            root.painter().rect_filled(
+                bounds,
+                0.0,
+                Color32::from_rgba_unmultiplied(25, 16, 11, 92),
+            );
+            self.reservation_windows(&ctx);
+            if !self.reservation_form_open {
+                self.pending_modal_backdrop = None;
+                self.modal_backdrop_texture = None;
+            }
+            return;
+        }
         self.title_bar(root);
         if self.section == Section::Launcher {
             self.show_launcher(root);
@@ -4170,6 +4207,112 @@ impl eframe::App for DashboardApp {
                 Section::Configuracoes => self.show_settings(ui, &ctx),
             });
     }
+}
+
+#[cfg(windows)]
+fn capture_blurred_backdrop() -> Option<image::RgbaImage> {
+    use std::{ffi::c_void, mem::size_of, ptr::null_mut};
+    use windows_sys::Win32::{
+        Foundation::{HWND, RECT},
+        Graphics::Gdi::{
+            BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BitBlt, CAPTUREBLT,
+            CreateCompatibleBitmap, CreateCompatibleDC, DIB_RGB_COLORS, DeleteDC,
+            DeleteObject, GetDC, GetDIBits, ReleaseDC, SRCCOPY, SelectObject,
+        },
+        UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowRect},
+    };
+
+    unsafe {
+        let window = GetForegroundWindow();
+        if window.is_null() {
+            return None;
+        }
+        let mut bounds = RECT::default();
+        if GetWindowRect(window, &mut bounds) == 0 {
+            return None;
+        }
+        let width = bounds.right - bounds.left;
+        let height = bounds.bottom - bounds.top;
+        if width <= 0 || height <= 0 {
+            return None;
+        }
+
+        let screen_dc = GetDC(null_mut::<core::ffi::c_void>() as HWND);
+        if screen_dc.is_null() {
+            return None;
+        }
+        let memory_dc = CreateCompatibleDC(screen_dc);
+        if memory_dc.is_null() {
+            ReleaseDC(null_mut::<core::ffi::c_void>() as HWND, screen_dc);
+            return None;
+        }
+        let bitmap = CreateCompatibleBitmap(screen_dc, width, height);
+        if bitmap.is_null() {
+            DeleteDC(memory_dc);
+            ReleaseDC(null_mut::<core::ffi::c_void>() as HWND, screen_dc);
+            return None;
+        }
+        let previous = SelectObject(memory_dc, bitmap as _);
+        let copied = BitBlt(
+            memory_dc,
+            0,
+            0,
+            width,
+            height,
+            screen_dc,
+            bounds.left,
+            bounds.top,
+            SRCCOPY | CAPTUREBLT,
+        );
+
+        let mut pixels = vec![0u8; width as usize * height as usize * 4];
+        let mut info = BITMAPINFO {
+            bmiHeader: BITMAPINFOHEADER {
+                biSize: size_of::<BITMAPINFOHEADER>() as u32,
+                biWidth: width,
+                biHeight: -height,
+                biPlanes: 1,
+                biBitCount: 32,
+                biCompression: BI_RGB,
+                biSizeImage: pixels.len() as u32,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let rows = if copied != 0 {
+            GetDIBits(
+                memory_dc,
+                bitmap,
+                0,
+                height as u32,
+                pixels.as_mut_ptr().cast::<c_void>(),
+                &mut info,
+                DIB_RGB_COLORS,
+            )
+        } else {
+            0
+        };
+
+        SelectObject(memory_dc, previous);
+        DeleteObject(bitmap as _);
+        DeleteDC(memory_dc);
+        ReleaseDC(null_mut::<core::ffi::c_void>() as HWND, screen_dc);
+        if rows != height {
+            return None;
+        }
+
+        for pixel in pixels.chunks_exact_mut(4) {
+            pixel.swap(0, 2);
+            pixel[3] = 255;
+        }
+        let captured = image::RgbaImage::from_raw(width as u32, height as u32, pixels)?;
+        Some(image::imageops::blur(&captured, 9.0))
+    }
+}
+
+#[cfg(not(windows))]
+fn capture_blurred_backdrop() -> Option<image::RgbaImage> {
+    None
 }
 
 fn reservation_toggle(ui: &mut egui::Ui, value: &mut bool, label: &str) {
