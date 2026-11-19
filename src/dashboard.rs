@@ -1838,20 +1838,6 @@ impl DashboardApp {
                         .color(INK),
                 );
             });
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if ui
-                    .add_sized(
-                        Vec2::splat(36.0),
-                        egui::Button::new(RichText::new("+").size(22.0).color(INK))
-                            .fill(SURFACE)
-                            .stroke(Stroke::new(1.0, LINE))
-                            .corner_radius(9.0),
-                    )
-                    .clicked()
-                {
-                    self.open_reservation_form(None);
-                }
-            });
         });
         let day_reservations: Vec<_> = self
             .business_data
