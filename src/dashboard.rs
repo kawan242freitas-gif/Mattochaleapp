@@ -2072,19 +2072,19 @@ impl DashboardApp {
                         });
                         ui.label(RichText::new("A data de saída libera o chalé para uma nova entrada no mesmo dia.").size(10.0).color(MUTED));
                         ui.horizontal(|ui| {
-                            ui.checkbox(&mut self.reservation_form.pets, "Leva pets");
-                            ui.checkbox(&mut self.reservation_form.breakfast, "Café da manhã");
+                            reservation_toggle(ui, &mut self.reservation_form.pets, "Leva pets");
+                            reservation_toggle(ui, &mut self.reservation_form.breakfast, "Café da manhã");
                         });
                         ui.horizontal(|ui| {
-                            ui.checkbox(&mut self.reservation_form.decoration, "Decoração");
-                            ui.checkbox(&mut self.reservation_form.reserved, "Status reservado");
+                            reservation_toggle(ui, &mut self.reservation_form.decoration, "Decoração");
+                            reservation_toggle(ui, &mut self.reservation_form.reserved, "Status reservado");
                         });
                         ui.label("Intolerâncias ou restrições do café");
                         ui.text_edit_singleline(&mut self.reservation_form.restrictions);
                         ui.label("Observações");
                         ui.add(egui::TextEdit::multiline(&mut self.reservation_form.notes).desired_rows(3));
                         ui.horizontal(|ui| {
-                            if ui.button("Anexar documentos").clicked() {
+                            if ui.add(egui::Button::new("Anexar documentos").fill(SURFACE_ALT).stroke(Stroke::new(1.0, LINE)).corner_radius(8.0)).clicked() {
                                 if let Some(paths) = rfd::FileDialog::new().pick_files() {
                                     self.reservation_form.attachments.extend(paths.into_iter().map(|path| path.to_string_lossy().to_string()));
                                 }
@@ -2094,8 +2094,8 @@ impl DashboardApp {
                         for path in &self.reservation_form.attachments { ui.label(RichText::new(file_name(path)).size(9.0).color(MUTED)); }
                         if let Some(error) = &self.notice { ui.label(RichText::new(error).size(10.0).color(RED)); }
                         ui.horizontal(|ui| {
-                            if ui.button("Cancelar").clicked() { cancel = true; }
-                            if ui.add_enabled(!self.reservation_form.responsible.trim().is_empty(), egui::Button::new("Salvar e marcar no calendário").fill(GREEN).corner_radius(9.0)).clicked() { save = true; }
+                            if ui.add(egui::Button::new("Cancelar").fill(SURFACE_ALT).stroke(Stroke::new(1.0, LINE)).corner_radius(8.0)).clicked() { cancel = true; }
+                            if ui.add_enabled(!self.reservation_form.responsible.trim().is_empty(), egui::Button::new("Salvar e marcar no calendário").fill(Color32::from_rgb(153, 87, 38)).stroke(Stroke::new(1.0, LINE)).corner_radius(9.0)).clicked() { save = true; }
                         });
                     });
                 });
@@ -4172,6 +4172,34 @@ impl eframe::App for DashboardApp {
     }
 }
 
+fn reservation_toggle(ui: &mut egui::Ui, value: &mut bool, label: &str) {
+    let (rect, response) = ui.allocate_exact_size(Vec2::new(46.0, 25.0), Sense::click());
+    if response.clicked() {
+        *value = !*value;
+    }
+    let track = if *value {
+        Color32::from_rgb(153, 87, 38)
+    } else {
+        SURFACE_ALT
+    };
+    let painter = ui.painter();
+    painter.rect_filled(rect, 13.0, track);
+    painter.rect_stroke(
+        rect,
+        13.0,
+        Stroke::new(1.0, LINE),
+        egui::StrokeKind::Inside,
+    );
+    let knob_x = if *value { rect.right() - 12.5 } else { rect.left() + 12.5 };
+    painter.circle_filled(
+        Pos2::new(knob_x, rect.center().y),
+        9.0,
+        if *value { INK } else { MUTED },
+    );
+    response.clone().on_hover_text(label);
+    ui.label(RichText::new(label).size(11.0).color(INK));
+}
+
 fn set_theme(ctx: &egui::Context) {
     ctx.set_theme(egui::Theme::Dark);
     let mut style = (*ctx.style_of(egui::Theme::Dark)).clone();
@@ -4192,6 +4220,9 @@ fn set_theme(ctx: &egui::Context) {
     style.visuals.widgets.hovered.fg_stroke.color = INK;
     style.visuals.widgets.active.bg_fill = Color32::from_rgb(138, 79, 36);
     style.visuals.widgets.active.fg_stroke.color = INK;
+    style.visuals.widgets.open.weak_bg_fill = SURFACE_ALT;
+    style.visuals.widgets.noninteractive.bg_fill = SURFACE;
+    style.visuals.widgets.noninteractive.fg_stroke.color = INK;
     style.spacing.item_spacing = Vec2::new(8.0, 8.0);
     style.spacing.button_padding = Vec2::new(13.0, 8.0);
     ctx.set_style_of(egui::Theme::Dark, style);
