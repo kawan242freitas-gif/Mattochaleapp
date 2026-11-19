@@ -1223,15 +1223,15 @@ impl DashboardApp {
     }
 
     fn show_reservas(&mut self, ui: &mut egui::Ui) {
-        const BG: Color32 = Color32::from_rgb(11, 19, 15);
-        const SURFACE: Color32 = Color32::from_rgb(18, 31, 24);
-        const SURFACE_HOVER: Color32 = Color32::from_rgb(24, 42, 32);
-        const BORDER: Color32 = Color32::from_rgb(48, 83, 62);
-        const TEXT: Color32 = Color32::from_rgb(235, 242, 235);
-        const MUTED: Color32 = Color32::from_rgb(155, 175, 160);
-        const ACCENT: Color32 = Color32::from_rgb(102, 181, 128);
-        const BLOCKED: Color32 = Color32::from_rgb(213, 164, 94);
-        const OCCUPIED: Color32 = Color32::from_rgb(187, 104, 87);
+        const BG: Color32 = Color32::from_rgb(25, 16, 11);
+        const SURFACE: Color32 = Color32::from_rgb(40, 25, 16);
+        const SURFACE_HOVER: Color32 = Color32::from_rgb(52, 32, 19);
+        const BORDER: Color32 = Color32::from_rgb(94, 58, 32);
+        const TEXT: Color32 = Color32::from_rgb(246, 231, 207);
+        const MUTED: Color32 = Color32::from_rgb(190, 160, 126);
+        const ACCENT: Color32 = Color32::from_rgb(210, 133, 62);
+        const BLOCKED: Color32 = Color32::from_rgb(229, 174, 107);
+        const OCCUPIED: Color32 = Color32::from_rgb(174, 82, 52);
 
         ui.painter().rect_filled(ui.max_rect(), 0.0, BG);
         egui::ScrollArea::vertical()
@@ -1342,7 +1342,7 @@ impl DashboardApp {
                                     .strong()
                                     .color(Color32::WHITE),
                             )
-                            .fill(Color32::from_rgb(38, 91, 55))
+                            .fill(Color32::from_rgb(153, 87, 38))
                             .stroke(Stroke::NONE)
                             .corner_radius(8.0),
                         );
@@ -1364,8 +1364,8 @@ impl DashboardApp {
                         let block = ui.add_sized(
                             Vec2::new(104.0, 34.0),
                             egui::Button::new(RichText::new("Bloquear").size(12.0).color(BLOCKED))
-                                .fill(Color32::from_rgb(52, 39, 23))
-                                .stroke(Stroke::new(1.0, Color32::from_rgb(105, 78, 43)))
+                                .fill(Color32::from_rgb(77, 43, 22))
+                                .stroke(Stroke::new(1.0, Color32::from_rgb(94, 58, 32)))
                                 .corner_radius(8.0),
                         );
                         if block.clicked() {
@@ -1432,13 +1432,13 @@ impl DashboardApp {
     }
 
     fn calendar_panel(&mut self, ui: &mut egui::Ui) {
-        const PANEL: Color32 = Color32::from_rgb(15, 26, 20);
-        const BORDER: Color32 = Color32::from_rgb(48, 83, 62);
-        const TEXT: Color32 = Color32::from_rgb(235, 242, 235);
-        const MUTED: Color32 = Color32::from_rgb(155, 175, 160);
-        const ACCENT: Color32 = Color32::from_rgb(102, 181, 128);
-        const BLOCKED: Color32 = Color32::from_rgb(213, 164, 94);
-        const OCCUPIED: Color32 = Color32::from_rgb(187, 104, 87);
+        const PANEL: Color32 = Color32::from_rgb(34, 21, 14);
+        const BORDER: Color32 = Color32::from_rgb(94, 58, 32);
+        const TEXT: Color32 = Color32::from_rgb(246, 231, 207);
+        const MUTED: Color32 = Color32::from_rgb(190, 160, 126);
+        const ACCENT: Color32 = Color32::from_rgb(210, 133, 62);
+        const BLOCKED: Color32 = Color32::from_rgb(229, 174, 107);
+        const OCCUPIED: Color32 = Color32::from_rgb(174, 82, 52);
 
         Frame::new()
             .fill(PANEL)
@@ -1517,9 +1517,9 @@ impl DashboardApp {
                             };
                             let selected = in_month && self.day_selected(day);
                             let fill = if selected {
-                                Color32::from_rgb(31, 75, 48)
+                                Color32::from_rgb(77, 43, 22)
                             } else if response.hovered() && in_month {
-                                Color32::from_rgb(24, 42, 32)
+                                Color32::from_rgb(52, 32, 19)
                             } else {
                                 PANEL
                             };
@@ -1542,7 +1542,7 @@ impl DashboardApp {
                                 if in_month {
                                     TEXT
                                 } else {
-                                    Color32::from_rgb(81, 99, 86)
+                                    Color32::from_rgb(112, 82, 61)
                                 },
                             );
                             let status_color = match status {
@@ -1558,10 +1558,10 @@ impl DashboardApp {
                                 );
                                 let (label, badge) = match status {
                                     DayStatus::Bloqueada => {
-                                        ("Bloqueada", Color32::from_rgb(57, 43, 26))
+                                        ("Bloqueada", Color32::from_rgb(77, 43, 22))
                                     }
                                     DayStatus::Ocupada => {
-                                        ("Ocupada", Color32::from_rgb(54, 34, 30))
+                                        ("Ocupada", Color32::from_rgb(73, 35, 23))
                                     }
                                     DayStatus::Disponivel => ("", PANEL),
                                 };
@@ -1606,11 +1606,11 @@ impl DashboardApp {
     ) {
         let (rect, _) = ui.allocate_exact_size(Vec2::new(width, 76.0), Sense::hover());
         let painter = ui.painter();
-        painter.rect_filled(rect, 8.0, Color32::from_rgb(18, 31, 24));
+        painter.rect_filled(rect, 8.0, Color32::from_rgb(40, 25, 16));
         painter.rect_stroke(
             rect,
             8.0,
-            Stroke::new(1.0, Color32::from_rgb(48, 83, 62)),
+            Stroke::new(1.0, Color32::from_rgb(94, 58, 32)),
             egui::StrokeKind::Inside,
         );
         painter.text(
@@ -1618,7 +1618,7 @@ impl DashboardApp {
             Align2::LEFT_TOP,
             label,
             FontId::proportional(10.0),
-            Color32::from_rgb(183, 203, 188),
+            Color32::from_rgb(190, 160, 126),
         );
         painter.text(
             rect.left_top() + Vec2::new(12.0, 30.0),
@@ -1632,7 +1632,7 @@ impl DashboardApp {
             Align2::LEFT_BOTTOM,
             caption,
             FontId::proportional(9.0),
-            Color32::from_rgb(137, 160, 144),
+            Color32::from_rgb(160, 128, 98),
         );
     }
 
