@@ -690,8 +690,8 @@ impl DashboardApp {
                     });
 
                     if !launcher && !self.profile_name.trim().is_empty() {
-                        let profile_width = (self.profile_name.chars().count() as f32 * 6.2 + 48.0)
-                            .clamp(82.0, 180.0);
+                        let profile_width = (self.profile_name.chars().count() as f32 * 6.2 + 60.0)
+                            .clamp(96.0, 200.0);
                         let capsule = Rect::from_center_size(
                             Pos2::new(rect.center().x, rect.center().y),
                             Vec2::new(profile_width, 34.0),
@@ -735,6 +735,18 @@ impl DashboardApp {
                             &self.profile_name,
                             FontId::proportional(11.0),
                             INK,
+                        );
+                        let name_width = self.profile_name.chars().count() as f32 * 6.2;
+                        let chevron_rect = Rect::from_center_size(
+                            Pos2::new(avatar_rect.right() + 6.0 + name_width + 10.0, capsule.center().y),
+                            Vec2::splat(12.0),
+                        );
+                        icons::paint_in_rect(
+                            ui,
+                            &self.icons,
+                            Icon::ChevronDown,
+                            chevron_rect,
+                            MUTED,
                         );
                     }
                 });
@@ -1439,6 +1451,20 @@ impl DashboardApp {
                         egui::ComboBox::from_id_salt("reservation-chalet-filter")
                             .selected_text(&self.calendar_chalet_filter)
                             .width(142.0)
+                            .popup_style(egui::style::StyleModifier::new(|style| {
+                                style.visuals.window_fill =
+                                    Color32::from_rgba_unmultiplied(49, 30, 20, 218);
+                                style.visuals.window_stroke =
+                                    Stroke::new(1.0, Color32::from_rgba_unmultiplied(190, 120, 68, 190));
+                                style.visuals.widgets.noninteractive.bg_fill = Color32::TRANSPARENT;
+                                style.visuals.widgets.inactive.bg_fill = Color32::TRANSPARENT;
+                                style.visuals.widgets.hovered.bg_fill =
+                                    Color32::from_rgba_unmultiplied(153, 87, 38, 155);
+                                style.visuals.widgets.active.bg_fill =
+                                    Color32::from_rgba_unmultiplied(153, 87, 38, 195);
+                                style.visuals.widgets.open.weak_bg_fill =
+                                    Color32::from_rgba_unmultiplied(153, 87, 38, 125);
+                            }))
                             .show_ui(ui, |ui| {
                                 ui.selectable_value(
                                     &mut self.calendar_chalet_filter,
@@ -1496,58 +1522,8 @@ impl DashboardApp {
                     });
                 });
 
-                ui.add_space(8.0);
-                ui.horizontal(|ui| {
-                    self.legend(ui, ACCENT, "Disponível");
-                    ui.add_space(10.0);
-                    self.legend(ui, BLOCKED, "Bloqueada");
-                    ui.add_space(10.0);
-                    self.legend(ui, OCCUPIED, "Ocupada");
-                });
-
                 ui.add_space(12.0);
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new(self.range_label()).size(12.0).color(MUTED));
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        let save = ui.add_sized(
-                            Vec2::new(128.0, 34.0),
-                            egui::Button::new(
-                                RichText::new("Salvar datas")
-                                    .size(12.0)
-                                    .strong()
-                                    .color(Color32::WHITE),
-                            )
-                            .fill(Color32::from_rgb(153, 87, 38))
-                            .stroke(Stroke::NONE)
-                            .corner_radius(8.0),
-                        );
-                        if save.clicked() {
-                            self.save_availability();
-                        }
-                        ui.add_space(8.0);
-                        let release = ui.add_sized(
-                            Vec2::new(104.0, 34.0),
-                            egui::Button::new(RichText::new("Liberar").size(12.0).color(TEXT))
-                                .fill(SURFACE_HOVER)
-                                .stroke(Stroke::new(1.0, BORDER))
-                                .corner_radius(8.0),
-                        );
-                        if release.clicked() {
-                            self.release_selected();
-                        }
-                        ui.add_space(8.0);
-                        let block = ui.add_sized(
-                            Vec2::new(104.0, 34.0),
-                            egui::Button::new(RichText::new("Bloquear").size(12.0).color(BLOCKED))
-                                .fill(Color32::from_rgb(77, 43, 22))
-                                .stroke(Stroke::new(1.0, Color32::from_rgb(94, 58, 32)))
-                                .corner_radius(8.0),
-                        );
-                        if block.clicked() {
-                            self.block_selected();
-                        }
-                    });
-                });
+                ui.label(RichText::new(self.range_label()).size(12.0).color(MUTED));
 
                 ui.add_space(10.0);
                 let calendar_width = (ui.available_width() - 342.0).max(520.0);
@@ -2069,12 +2045,12 @@ impl DashboardApp {
                             });
                         });
                         ui.horizontal(|ui| {
-                            ui.vertical(|ui| { ui.label("Entrada · AAAA-MM-DD"); ui.text_edit_singleline(&mut self.reservation_form.check_in); });
-                            ui.vertical(|ui| { ui.label("Saída · AAAA-MM-DD"); ui.text_edit_singleline(&mut self.reservation_form.check_out); });
+                            reservation_date_wheel(ui, "Entrada", "check-in-date", &mut self.reservation_form.check_in);
+                            reservation_date_wheel(ui, "Saída", "check-out-date", &mut self.reservation_form.check_out);
                         });
                         ui.horizontal(|ui| {
-                            ui.vertical(|ui| { ui.label("Horário de entrada"); ui.text_edit_singleline(&mut self.reservation_form.check_in_time); });
-                            ui.vertical(|ui| { ui.label("Horário de saída"); ui.text_edit_singleline(&mut self.reservation_form.check_out_time); });
+                            reservation_time_wheel(ui, "Horário de entrada", "check-in-time", &mut self.reservation_form.check_in_time);
+                            reservation_time_wheel(ui, "Horário de saída", "check-out-time", &mut self.reservation_form.check_out_time);
                         });
                         ui.label(RichText::new("A data de saída libera o chalé para uma nova entrada no mesmo dia.").size(10.0).color(MUTED));
                         ui.horizontal(|ui| {
@@ -4011,22 +3987,6 @@ impl DashboardApp {
         response.clicked()
     }
 
-    fn legend(&self, ui: &mut egui::Ui, color: Color32, label: &str) {
-        ui.horizontal_centered(|ui| {
-            ui.painter().circle_filled(
-                Pos2::new(ui.cursor().left() + 6.0, ui.cursor().center().y),
-                6.0,
-                color,
-            );
-            ui.add_space(16.0);
-            ui.label(
-                RichText::new(label)
-                    .size(11.0)
-                    .color(Color32::from_rgb(183, 203, 188)),
-            );
-        });
-    }
-
     fn select_day(&mut self, day: u32) {
         self.selected_calendar_day = date_key(self.year, self.month, day);
         self.selected_range = match self.selected_range {
@@ -4215,9 +4175,9 @@ fn capture_blurred_backdrop() -> Option<image::RgbaImage> {
     use windows_sys::Win32::{
         Foundation::{HWND, RECT},
         Graphics::Gdi::{
-            BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BitBlt, CAPTUREBLT,
-            CreateCompatibleBitmap, CreateCompatibleDC, DIB_RGB_COLORS, DeleteDC,
-            DeleteObject, GetDC, GetDIBits, ReleaseDC, SRCCOPY, SelectObject,
+            BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BitBlt, CAPTUREBLT, CreateCompatibleBitmap,
+            CreateCompatibleDC, DIB_RGB_COLORS, DeleteDC, DeleteObject, GetDC, GetDIBits,
+            ReleaseDC, SRCCOPY, SelectObject,
         },
         UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowRect},
     };
@@ -4315,6 +4275,194 @@ fn capture_blurred_backdrop() -> Option<image::RgbaImage> {
     None
 }
 
+fn reservation_date_wheel(ui: &mut egui::Ui, label: &str, id: &str, value: &mut String) {
+    let (mut year, month, day) = parse_iso_date(value).unwrap_or_else(|| {
+        let (year, month, day) = today_utc();
+        (year, month, day)
+    });
+    let mut month = month as i32;
+    let mut day = day as i32;
+    ui.vertical(|ui| {
+        ui.label(label);
+        egui::Frame::new()
+            .fill(Color32::from_rgb(31, 20, 14))
+            .stroke(Stroke::new(1.0, LINE))
+            .corner_radius(9.0)
+            .inner_margin(Margin::symmetric(6, 5))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    reservation_wheel_column(
+                        ui,
+                        &format!("{id}-day"),
+                        "DIA",
+                        &mut day,
+                        1,
+                        days_in_month(year, month as u32) as i32,
+                        47.0,
+                        false,
+                        |n| format!("{n:02}"),
+                    );
+                    let month_names = [
+                        "jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out",
+                        "nov", "dez",
+                    ];
+                    reservation_wheel_column(
+                        ui,
+                        &format!("{id}-month"),
+                        "MÊS",
+                        &mut month,
+                        1,
+                        12,
+                        73.0,
+                        true,
+                        |n| month_names[(n - 1) as usize].to_owned(),
+                    );
+                    reservation_wheel_column(
+                        ui,
+                        &format!("{id}-year"),
+                        "ANO",
+                        &mut year,
+                        1900,
+                        2200,
+                        66.0,
+                        false,
+                        |n| n.to_string(),
+                    );
+                });
+            });
+    });
+    day = day.min(days_in_month(year, month as u32) as i32);
+    *value = date_key(year, month as u32, day as u32);
+}
+
+fn reservation_time_wheel(ui: &mut egui::Ui, label: &str, id: &str, value: &mut String) {
+    let mut parts = value.split(':');
+    let mut hour = parts
+        .next()
+        .and_then(|part| part.parse::<i32>().ok())
+        .filter(|n| (0..24).contains(n))
+        .unwrap_or(14);
+    let mut minute = parts
+        .next()
+        .and_then(|part| part.parse::<i32>().ok())
+        .filter(|n| (0..60).contains(n))
+        .unwrap_or(0);
+    ui.vertical(|ui| {
+        ui.label(label);
+        egui::Frame::new()
+            .fill(Color32::from_rgb(31, 20, 14))
+            .stroke(Stroke::new(1.0, LINE))
+            .corner_radius(9.0)
+            .inner_margin(Margin::symmetric(6, 5))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    reservation_wheel_column(
+                        ui,
+                        &format!("{id}-hour"),
+                        "HORA",
+                        &mut hour,
+                        0,
+                        23,
+                        62.0,
+                        true,
+                        |n| format!("{n:02}"),
+                    );
+                    reservation_wheel_column(
+                        ui,
+                        &format!("{id}-minute"),
+                        "MIN",
+                        &mut minute,
+                        0,
+                        59,
+                        62.0,
+                        true,
+                        |n| format!("{n:02}"),
+                    );
+                });
+            });
+    });
+    *value = format!("{hour:02}:{minute:02}");
+}
+
+fn reservation_wheel_column(
+    ui: &mut egui::Ui,
+    id: &str,
+    title: &str,
+    value: &mut i32,
+    min: i32,
+    max: i32,
+    width: f32,
+    wraps: bool,
+    format_value: impl Fn(i32) -> String,
+) {
+    ui.push_id(id, |ui| {
+        ui.vertical(|ui| {
+            ui.label(RichText::new(title).size(8.0).strong().color(MUTED));
+            let (rect, response) = ui.allocate_exact_size(Vec2::new(width, 108.0), Sense::click());
+            let scroll = if response.hovered() {
+                ui.input(|input| input.smooth_scroll_delta.y)
+            } else {
+                0.0
+            };
+            if scroll.abs() >= 1.0 {
+                let steps = ((scroll.abs() / 32.0).ceil() as i32).clamp(1, 5);
+                let direction = if scroll > 0.0 { -1 } else { 1 };
+                for _ in 0..steps {
+                    *value = reservation_wheel_step(*value, direction, min, max, wraps);
+                }
+            }
+            if response.clicked() {
+                if let Some(pointer) = response.interact_pointer_pos() {
+                    let delta = pointer.y - rect.center().y;
+                    if delta.abs() > 10.0 {
+                        *value = reservation_wheel_step(
+                            *value,
+                            if delta < 0.0 { -1 } else { 1 },
+                            min,
+                            max,
+                            wraps,
+                        );
+                    }
+                }
+            }
+
+            let painter = ui.painter().with_clip_rect(rect);
+            let selected = Rect::from_center_size(rect.center(), Vec2::new(rect.width(), 27.0));
+            painter.rect_filled(selected, 6.0, Color32::from_rgb(73, 42, 25));
+            painter.rect_stroke(
+                selected,
+                6.0,
+                Stroke::new(1.0, ORANGE),
+                egui::StrokeKind::Inside,
+            );
+            for offset in -2..=2 {
+                let item = reservation_wheel_step(*value, offset, min, max, wraps);
+                let y = rect.center().y + offset as f32 * 25.0;
+                let color = match offset {
+                    0 => INK,
+                    -1 | 1 => MUTED,
+                    _ => Color32::from_rgba_unmultiplied(190, 160, 126, 105),
+                };
+                painter.text(
+                    Pos2::new(rect.center().x, y),
+                    Align2::CENTER_CENTER,
+                    format_value(item),
+                    FontId::proportional(if offset == 0 { 16.0 } else { 13.0 }),
+                    color,
+                );
+            }
+        });
+    });
+}
+
+fn reservation_wheel_step(value: i32, delta: i32, min: i32, max: i32, wraps: bool) -> i32 {
+    if wraps {
+        min + (value - min + delta).rem_euclid(max - min + 1)
+    } else {
+        (value + delta).clamp(min, max)
+    }
+}
+
 fn reservation_toggle(ui: &mut egui::Ui, value: &mut bool, label: &str) {
     let (rect, response) = ui.allocate_exact_size(Vec2::new(46.0, 25.0), Sense::click());
     if response.clicked() {
@@ -4327,13 +4475,12 @@ fn reservation_toggle(ui: &mut egui::Ui, value: &mut bool, label: &str) {
     };
     let painter = ui.painter();
     painter.rect_filled(rect, 13.0, track);
-    painter.rect_stroke(
-        rect,
-        13.0,
-        Stroke::new(1.0, LINE),
-        egui::StrokeKind::Inside,
-    );
-    let knob_x = if *value { rect.right() - 12.5 } else { rect.left() + 12.5 };
+    painter.rect_stroke(rect, 13.0, Stroke::new(1.0, LINE), egui::StrokeKind::Inside);
+    let knob_x = if *value {
+        rect.right() - 12.5
+    } else {
+        rect.left() + 12.5
+    };
     painter.circle_filled(
         Pos2::new(knob_x, rect.center().y),
         9.0,
