@@ -1,6 +1,12 @@
 # Matto Chalés para Windows (Rust nativo)
 
-Aplicativo desktop independente, com interface implementada em Rust/egui. A janela não carrega a interface do site. As APIs HTTPS da produção são usadas somente para sincronizar produtos e pedidos.
+Aplicativo desktop independente, com interface implementada em Rust/egui. A janela não carrega a interface do site. As APIs HTTPS da produção sincronizam produtos, pedidos, reservas e dados financeiros.
+
+## Dados do site
+
+Reservas, movimentações e contas a pagar mantêm um cache local e sincronizam com o MongoDB do site pela API protegida da Vercel. Para conectar, abra **Configurações → Dados e conexão** e informe a chave administrativa configurada como `ADMIN_API_TOKEN` no projeto Vercel. A chave fica apenas em memória durante a sessão. Sem conexão, o app continua usando o cache local.
+
+O backend correspondente está no repositório `Mattochal-sadega`, no arquivo `api/business-data.ts`. O deploy desse backend deve incluir esse endpoint antes que a sincronização remota fique disponível.
 
 ## Executar
 

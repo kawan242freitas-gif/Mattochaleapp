@@ -207,6 +207,8 @@ struct PayableForm {
 
 enum Event {
     Products(Result<Vec<Product>, String>),
+    BusinessDataLoaded(Result<serde_json::Value, String>),
+    BusinessDataSynced(Result<(), String>),
     ProductImage(String, Result<image::RgbaImage, String>),
     AdminAuthorized(Result<(), String>),
     ProductSaved(Result<Product, String>),
@@ -507,9 +509,91 @@ impl DashboardApp {
         });
     }
 
+    fn request_business_data(&self, token: String, ctx: egui::Context) {
+        let tx = self.tx.clone();
+        thread::spawn(move || {
+            let result = api::fetch_business_data(&token).map_err(|error| error.to_string());
+            let _ = tx.send(Event::BusinessDataLoaded(result));
+            ctx.request_repaint();
+        });
+    }
+
+    fn sync_business_data(&mut self) {
+        if !self.admin_unlocked || self.admin_token.trim().is_empty() {
+            return;
+        }
+        let token = self.admin_token.trim().to_owned();
+        let data = match serde_json::to_value(&self.business_data) {
+            Ok(value) => value,
+            Err(error) => {
+                self.notice = Some(format!("Não foi possível preparar a sincronização: {error}"));
+                return;
+            }
+        };
+        let tx = self.tx.clone();
+        let ctx = self.last_context.clone();
+        thread::spawn(move || {
+            let result = ["reservations", "movements", "payables"]
+                .into_iter()
+                .try_for_each(|collection| {
+                    let records = data.get(collection).cloned().unwrap_or(serde_json::Value::Array(Vec::new()));
+                    api::sync_business_records(&token, collection, &records).map_err(|error| error.to_string())
+                });
+            let _ = tx.send(Event::BusinessDataSynced(result));
+            ctx.request_repaint();
+        });
+    }
+
+    fn delete_remote_business_record(&self, collection: &'static str, id: String) {
+        if !self.admin_unlocked || self.admin_token.trim().is_empty() {
+            return;
+        }
+        let token = self.admin_token.trim().to_owned();
+        let tx = self.tx.clone();
+        let ctx = self.last_context.clone();
+        thread::spawn(move || {
+            let result = api::delete_business_record(&token, collection, &id).map_err(|error| error.to_string());
+            let _ = tx.send(Event::BusinessDataSynced(result));
+            ctx.request_repaint();
+        });
+    }
+
     fn handle_events(&mut self, ctx: &egui::Context) {
         while let Ok(event) = self.rx.try_recv() {
             match event {
+                Event::BusinessDataLoaded(Ok(remote_value)) => {
+                    match serde_json::from_value::<BusinessData>(remote_value) {
+                        Ok(mut remote) => {
+                            let local = self.business_data.clone();
+                            for record in local.reservations {
+                                if !remote.reservations.iter().any(|item| item.id == record.id) {
+                                    remote.reservations.push(record);
+                                }
+                            }
+                            for record in local.movements {
+                                if !remote.movements.iter().any(|item| item.id == record.id) {
+                                    remote.movements.push(record);
+                                }
+                            }
+                            for record in local.payables {
+                                if !remote.payables.iter().any(|item| item.id == record.id) {
+                                    remote.payables.push(record);
+                                }
+                            }
+                            self.business_data = remote;
+                            self.persist_business_data();
+                            self.notice = Some("Reservas e financeiro sincronizados com o banco do site.".to_owned());
+                        }
+                        Err(error) => self.notice = Some(format!("Os dados do site vieram em formato inválido: {error}")),
+                    }
+                }
+                Event::BusinessDataLoaded(Err(error)) => {
+                    self.notice = Some(format!("Não foi possível carregar os dados do site; os dados locais foram mantidos. {error}"));
+                }
+                Event::BusinessDataSynced(Ok(())) => {}
+                Event::BusinessDataSynced(Err(error)) => {
+                    self.notice = Some(format!("Os dados foram mantidos localmente, mas a sincronização falhou: {error}"));
+                }
                 Event::Products(Ok(products)) => {
                     self.products_loading = false;
                     self.product_error = None;
@@ -567,6 +651,7 @@ impl DashboardApp {
                     self.admin_unlocked = true;
                     self.admin_error = None;
                     self.request_products(ctx.clone());
+                    self.request_business_data(self.admin_token.trim().to_owned(), ctx.clone());
                     self.settings_notice = Some("Acesso ao catálogo autorizado.".to_owned());
                 }
                 Event::AdminAuthorized(Err(error)) => {
@@ -3233,6 +3318,7 @@ impl DashboardApp {
             }
             if delete {
                 self.business_data.reservations.retain(|item| item.id != id);
+                self.delete_remote_business_record("reservations", id.clone());
                 self.persist_business_data();
                 self.reservation_details_id = None;
             } else if !open {
@@ -3741,6 +3827,7 @@ impl DashboardApp {
             self.notice =
                 Some("Não foi possível localizar a pasta de dados do aplicativo.".to_owned());
         }
+        self.sync_business_data();
     }
 
     fn show_settings(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
@@ -3855,7 +3942,7 @@ impl DashboardApp {
                                         SettingsPage::Chales => self.settings_chalets(ui),
                                         SettingsPage::Catalogo => self.settings_catalog(ui, ctx),
                                         SettingsPage::Aparencia => self.settings_appearance(ui),
-                                        SettingsPage::Dados => self.settings_data(ui),
+                                        SettingsPage::Dados => self.settings_data(ui, ctx),
                                     }
                                     if let Some(notice) = &self.settings_notice {
                                         ui.add_space(14.0);
@@ -4594,7 +4681,7 @@ impl DashboardApp {
         });
     }
 
-    fn settings_data(&mut self, ui: &mut egui::Ui) {
+    fn settings_data(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         settings_heading(
             ui,
             "Dados e conexão",
@@ -4607,6 +4694,36 @@ impl DashboardApp {
             "Armazenadas neste computador",
         );
         settings_status(ui, "Disponibilidade", "Arquivo local · não sincronizado");
+        settings_status(
+            ui,
+            "Reservas e financeiro",
+            if self.admin_unlocked { "Conectado ao banco do site" } else { "Cache local · conecte para sincronizar" },
+        );
+        if self.admin_unlocked {
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Conexão autenticada; alterações são sincronizadas com o site.").size(11.0).color(MUTED));
+                if ui.button("Desconectar").clicked() {
+                    self.admin_unlocked = false;
+                    self.admin_token.clear();
+                }
+            });
+        } else {
+            ui.horizontal(|ui| {
+                ui.add_sized(
+                    Vec2::new(340.0, 36.0),
+                    egui::TextEdit::singleline(&mut self.admin_token).password(true).hint_text("Chave de administração do site"),
+                );
+                let unlock = ui.add_enabled(!self.admin_busy, egui::Button::new(if self.admin_busy { "Conectando…" } else { "Conectar ao banco" }).fill(GREEN).corner_radius(10));
+                if unlock.clicked() {
+                    self.authenticate_admin(ctx.clone());
+                }
+            });
+            if let Some(error) = &self.admin_error {
+                ui.label(RichText::new(error).size(11.0).color(RED));
+            }
+        }
+        ui.label(RichText::new("Reservas e financeiro mantêm uma cópia local e sincronizam quando esta conexão está ativa. A chave fica apenas na memória do app.").size(10.0).color(MUTED));
+        ui.add_space(8.0);
         settings_status(
             ui,
             "Catálogo de produtos",
