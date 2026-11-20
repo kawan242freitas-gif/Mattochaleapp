@@ -251,6 +251,8 @@ pub struct DashboardApp {
     pending_modal_backdrop: Option<image::RgbaImage>,
     modal_backdrop_texture: Option<TextureHandle>,
     chalet_filter_backdrop_texture: Option<TextureHandle>,
+    profile_menu_backdrop_texture: Option<TextureHandle>,
+    reservation_status_backdrop_texture: Option<TextureHandle>,
     reservation_form: ReservationForm,
     editing_reservation_id: Option<String>,
     reservation_details_id: Option<String>,
@@ -388,6 +390,8 @@ impl DashboardApp {
             pending_modal_backdrop: None,
             modal_backdrop_texture: None,
             chalet_filter_backdrop_texture: None,
+            profile_menu_backdrop_texture: None,
+            reservation_status_backdrop_texture: None,
             reservation_form: ReservationForm::default(),
             editing_reservation_id: None,
             reservation_details_id: None,
@@ -1033,18 +1037,72 @@ impl DashboardApp {
                                 self.update_prompt_open = true;
                             }
                         } else {
+                            if profile_response.clicked() {
+                                if !egui::Popup::is_id_open(&ctx, egui::Id::new("profile-functions-menu")) {
+                                    self.profile_menu_backdrop_texture =
+                                        capture_blurred_backdrop().map(|backdrop| {
+                                            let size =
+                                                [backdrop.width() as usize, backdrop.height() as usize];
+                                            ctx.load_texture(
+                                                "profile-menu-blurred-backdrop",
+                                                egui::ColorImage::from_rgba_unmultiplied(
+                                                    size,
+                                                    backdrop.as_raw(),
+                                                ),
+                                                egui::TextureOptions::LINEAR,
+                                            )
+                                        });
+                                } else {
+                                    self.profile_menu_backdrop_texture = None;
+                                }
+                            }
+                            let backdrop_texture = self.profile_menu_backdrop_texture.clone();
+                            let has_blurred_backdrop = backdrop_texture.is_some();
                             egui::Popup::menu(&profile_response)
                                 .id(egui::Id::new("profile-functions-menu"))
                                 .align(egui::RectAlign::BOTTOM)
                                 .gap(2.0)
                                 .width(170.0)
-                                .style(egui::style::StyleModifier::new(|style| {
-                                    style.visuals.window_fill = SURFACE;
+                                .style(egui::style::StyleModifier::new(move |style| {
+                                    style.visuals.window_fill = if has_blurred_backdrop {
+                                        Color32::TRANSPARENT
+                                    } else {
+                                        SURFACE
+                                    };
                                     style.visuals.window_stroke = Stroke::new(1.0, LINE);
                                 }))
                                 .show(|menu_ui| {
+                                    if let Some(texture) = &backdrop_texture {
+                                        let viewport = menu_ui.ctx().content_rect();
+                                        let menu_rect = menu_ui.max_rect().intersect(viewport);
+                                        let uv_rect = Rect::from_min_max(
+                                            Pos2::new(
+                                                (menu_rect.left() - viewport.left()) / viewport.width(),
+                                                (menu_rect.top() - viewport.top()) / viewport.height(),
+                                            ),
+                                            Pos2::new(
+                                                (menu_rect.right() - viewport.left()) / viewport.width(),
+                                                (menu_rect.bottom() - viewport.top()) / viewport.height(),
+                                            ),
+                                        );
+                                        menu_ui.painter().image(
+                                            texture.id(),
+                                            menu_rect,
+                                            uv_rect,
+                                            Color32::WHITE,
+                                        );
+                                        menu_ui.painter().rect_filled(
+                                            menu_rect,
+                                            10.0,
+                                            Color32::from_rgba_unmultiplied(48, 29, 19, 105),
+                                        );
+                                    }
                                     Frame::new()
-                                        .fill(SURFACE)
+                                        .fill(if has_blurred_backdrop {
+                                            Color32::TRANSPARENT
+                                        } else {
+                                            SURFACE
+                                        })
                                         .stroke(Stroke::new(1.0, LINE))
                                         .corner_radius(10.0)
                                         .inner_margin(Margin::same(8))
@@ -1078,6 +1136,9 @@ impl DashboardApp {
                                             }
                                         });
                                 });
+                            if !egui::Popup::is_id_open(&ctx, egui::Id::new("profile-functions-menu")) {
+                                self.profile_menu_backdrop_texture = None;
+                            }
                         }
                     }
                 });
@@ -1822,7 +1883,9 @@ impl DashboardApp {
                         let has_blurred_backdrop = self.chalet_filter_backdrop_texture.is_some();
                         egui::Popup::menu(&response)
                             .id(popup_id)
-                            .width(170.0)
+                            .align(egui::RectAlign::BOTTOM)
+                            .gap(1.0)
+                            .width(response.rect.width())
                             .style(egui::style::StyleModifier::new(move |style| {
                                 style.visuals.window_fill =
                                     if has_blurred_backdrop {
@@ -1938,20 +2001,6 @@ impl DashboardApp {
                 // below the visible area. Shrink day cells on shorter windows.
                 let calendar_height = (ui.available_height() - 100.0).clamp(328.0, 486.0);
                 let calendar_cell_height = ((calendar_height - 78.0) / 6.0).clamp(42.0, 68.0);
-                ui.horizontal_top(|ui| {
-                    ui.allocate_ui_with_layout(
-                        Vec2::new(calendar_width, calendar_height),
-                        Layout::top_down(Align::Min),
-                        |ui| self.calendar_panel(ui, calendar_cell_height),
-                    );
-                    ui.separator();
-                    ui.allocate_ui_with_layout(
-                        Vec2::new(320.0, calendar_height),
-                        Layout::top_down(Align::Min),
-                        |ui| self.reservation_day_panel(ui),
-                    );
-                });
-
                 let month_prefix = format!("{:04}-{:02}-", self.year, self.month);
                 let blocked = self
                     .blocked_dates
@@ -1997,26 +2046,39 @@ impl DashboardApp {
                         TEXT,
                     ),
                 ];
-                ui.add_space(5.0);
-                let card_gap = 5.0;
-                let card_width = ((calendar_width - card_gap * 3.0) / 4.0).max(80.0);
-                ui.allocate_ui_with_layout(
-                    Vec2::new(calendar_width, 62.0),
-                    Layout::left_to_right(Align::Min),
-                    |cards_ui| {
-                        cards_ui.spacing_mut().item_spacing.x = card_gap;
-                        for (label, value, caption, color) in metrics {
-                            self.reservation_metric(
-                                cards_ui,
-                                label,
-                                &value,
-                                caption,
-                                color,
-                                card_width,
-                            );
-                        }
-                    },
-                );
+                ui.horizontal_top(|ui| {
+                    ui.vertical(|ui| {
+                        ui.set_width(calendar_width);
+                        ui.spacing_mut().item_spacing.y = 0.0;
+                        self.calendar_panel(ui, calendar_cell_height);
+                        ui.add_space(3.0);
+                        let card_gap = 5.0;
+                        let card_width = ((calendar_width - card_gap * 3.0) / 4.0).max(80.0);
+                        ui.allocate_ui_with_layout(
+                            Vec2::new(calendar_width, 62.0),
+                            Layout::left_to_right(Align::Min),
+                            |cards_ui| {
+                                cards_ui.spacing_mut().item_spacing.x = card_gap;
+                                for (label, value, caption, color) in metrics {
+                                    self.reservation_metric(
+                                        cards_ui,
+                                        label,
+                                        &value,
+                                        caption,
+                                        color,
+                                        card_width,
+                                    );
+                                }
+                            },
+                        );
+                    });
+                    ui.separator();
+                    ui.allocate_ui_with_layout(
+                        Vec2::new(320.0, calendar_height),
+                        Layout::top_down(Align::Min),
+                        |ui| self.reservation_day_panel(ui),
+                    );
+                });
 
                 if let Some(notice) = &self.notice {
                     ui.add_space(8.0);
@@ -2363,11 +2425,21 @@ impl DashboardApp {
                     );
                     ui.separator();
                     ui.horizontal(|ui| {
+                        let glass_fill = Color32::from_rgba_unmultiplied(153, 87, 38, 105);
+                        let glass_stroke = Stroke::new(
+                            1.0,
+                            Color32::from_rgba_unmultiplied(210, 133, 62, 150),
+                        );
                         if ui
-                            .button(
-                                RichText::new("Abrir detalhes da reserva →")
-                                    .size(10.0)
-                                    .color(ORANGE),
+                            .add(
+                                egui::Button::new(
+                                    RichText::new("Abrir detalhes da reserva")
+                                        .size(10.0)
+                                        .color(ORANGE),
+                                )
+                                .fill(glass_fill)
+                                .stroke(glass_stroke)
+                                .corner_radius(7.0),
                             )
                             .clicked()
                         {
@@ -2377,7 +2449,14 @@ impl DashboardApp {
                         }
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                             if ui
-                                .button(RichText::new("Editar").size(10.0).color(INK))
+                                .add(
+                                    egui::Button::new(
+                                        RichText::new("Editar").size(10.0).color(INK),
+                                    )
+                                    .fill(glass_fill)
+                                    .stroke(glass_stroke)
+                                    .corner_radius(7.0),
+                                )
                                 .clicked()
                             {
                                 self.open_reservation_form(Some(&reservation));
@@ -2651,7 +2730,7 @@ impl DashboardApp {
                 .resizable(false)
                 .fixed_pos(ctx.content_rect().center())
                 .pivot(Align2::CENTER_CENTER)
-                .fixed_size(Vec2::new(420.0, 670.0))
+                .fixed_size(Vec2::new(420.0, 720.0))
                 .frame(
                     Frame::new()
                         .fill(SURFACE)
@@ -2710,36 +2789,47 @@ impl DashboardApp {
                         });
 
                         ui.horizontal(|ui| {
-                            for (label, date, time) in [
-                                ("Entrada", &item.check_in, &item.check_in_time),
-                                ("Saída", &item.check_out, &item.check_out_time),
+                            for (label, date, time, icon) in [
+                                (
+                                    "Entrada",
+                                    &item.check_in,
+                                    &item.check_in_time,
+                                    Icon::DoorOpen,
+                                ),
+                                (
+                                    "Saída",
+                                    &item.check_out,
+                                    &item.check_out_time,
+                                    Icon::DoorClosed,
+                                ),
                             ] {
                                 Frame::new()
                                     .fill(SURFACE_ALT)
                                     .corner_radius(9.0)
-                                    .inner_margin(Margin::same(9))
+                                    .inner_margin(Margin::symmetric(10, 9))
                                     .show(ui, |ui| {
                                         ui.set_min_width(164.0);
-                                        ui.label(
-                                            RichText::new(if label == "Entrada" {
-                                                "↘"
-                                            } else {
-                                                "↗"
-                                            })
-                                            .size(12.0)
-                                            .color(ORANGE),
-                                        );
-                                        ui.label(RichText::new(label).size(9.0).color(MUTED));
-                                        ui.label(
-                                            RichText::new(format!(
-                                                "{} · {}",
-                                                format_date_label(date),
-                                                time
-                                            ))
-                                            .size(10.0)
-                                            .strong()
-                                            .color(INK),
-                                        );
+                                        ui.set_min_height(42.0);
+                                        ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                                            icons::image(ui, &self.icons, icon, 15.0, ORANGE);
+                                            ui.vertical(|ui| {
+                                                ui.label(
+                                                    RichText::new(label)
+                                                        .size(9.0)
+                                                        .color(MUTED),
+                                                );
+                                                ui.label(
+                                                    RichText::new(format!(
+                                                        "{} · {}",
+                                                        format_date_label(date),
+                                                        time
+                                                    ))
+                                                    .size(10.0)
+                                                    .strong()
+                                                    .color(INK),
+                                                );
+                                            });
+                                        });
                                     });
                             }
                         });
@@ -2756,25 +2846,134 @@ impl DashboardApp {
                                         .strong()
                                         .color(MUTED),
                                 );
-                                egui::ComboBox::from_id_salt("reservation-detail-status")
-                                    .selected_text(if status_reserved {
-                                        "Reservado"
-                                    } else {
-                                        "Rascunho"
-                                    })
-                                    .width(ui.available_width())
-                                    .show_ui(ui, |ui| {
-                                        ui.selectable_value(
-                                            &mut status_reserved,
-                                            true,
-                                            "Reservado",
-                                        );
-                                        ui.selectable_value(
-                                            &mut status_reserved,
-                                            false,
-                                            "Rascunho",
-                                        );
+                                let status_popup_id =
+                                    ui.make_persistent_id("reservation-detail-status-popup");
+                                let status_popup_was_open =
+                                    egui::Popup::is_id_open(ui.ctx(), status_popup_id);
+                                let status_response = ui.add_sized(
+                                    Vec2::new(ui.available_width(), 34.0),
+                                    egui::Button::new(
+                                        RichText::new(if status_reserved {
+                                            "Reservado"
+                                        } else {
+                                            "Rascunho"
+                                        })
+                                        .size(11.0)
+                                        .color(INK),
+                                    )
+                                    .fill(SURFACE_ALT)
+                                    .stroke(Stroke::new(1.0, LINE))
+                                    .corner_radius(8.0),
+                                );
+                                icons::paint_in_rect(
+                                    ui,
+                                    &self.icons,
+                                    Icon::ChevronDown,
+                                    Rect::from_center_size(
+                                        Pos2::new(
+                                            status_response.rect.right() - 14.0,
+                                            status_response.rect.center().y,
+                                        ),
+                                        Vec2::splat(13.0),
+                                    ),
+                                    MUTED,
+                                );
+                                if status_response.clicked() && !status_popup_was_open {
+                                    self.reservation_status_backdrop_texture =
+                                        capture_blurred_backdrop().map(|backdrop| {
+                                            let size =
+                                                [backdrop.width() as usize, backdrop.height() as usize];
+                                            ui.ctx().load_texture(
+                                                "reservation-status-blurred-backdrop",
+                                                egui::ColorImage::from_rgba_unmultiplied(
+                                                    size,
+                                                    backdrop.as_raw(),
+                                                ),
+                                                egui::TextureOptions::LINEAR,
+                                            )
+                                        });
+                                } else if status_response.clicked() {
+                                    self.reservation_status_backdrop_texture = None;
+                                }
+                                let status_backdrop =
+                                    self.reservation_status_backdrop_texture.clone();
+                                let has_status_backdrop = status_backdrop.is_some();
+                                egui::Popup::menu(&status_response)
+                                    .id(status_popup_id)
+                                    .align(egui::RectAlign::BOTTOM_START)
+                                    .gap(1.0)
+                                    .width(status_response.rect.width())
+                                    .style(egui::style::StyleModifier::new(move |style| {
+                                        style.visuals.window_fill = if has_status_backdrop {
+                                            Color32::TRANSPARENT
+                                        } else {
+                                            SURFACE
+                                        };
+                                        style.visuals.window_stroke = Stroke::new(1.0, LINE);
+                                        style.visuals.widgets.noninteractive.bg_fill =
+                                            Color32::TRANSPARENT;
+                                        style.visuals.widgets.inactive.bg_fill =
+                                            Color32::TRANSPARENT;
+                                        style.visuals.widgets.hovered.bg_fill = ORANGE_PALE;
+                                        style.visuals.widgets.active.bg_fill =
+                                            Color32::from_rgb(91, 54, 29);
+                                    }))
+                                    .show(|popup_ui| {
+                                        if let Some(texture) = &status_backdrop {
+                                            let viewport = popup_ui.ctx().content_rect();
+                                            let menu_rect =
+                                                popup_ui.max_rect().intersect(viewport);
+                                            let uv_rect = Rect::from_min_max(
+                                                Pos2::new(
+                                                    (menu_rect.left() - viewport.left())
+                                                        / viewport.width(),
+                                                    (menu_rect.top() - viewport.top())
+                                                        / viewport.height(),
+                                                ),
+                                                Pos2::new(
+                                                    (menu_rect.right() - viewport.left())
+                                                        / viewport.width(),
+                                                    (menu_rect.bottom() - viewport.top())
+                                                        / viewport.height(),
+                                                ),
+                                            );
+                                            popup_ui.painter().image(
+                                                texture.id(),
+                                                menu_rect,
+                                                uv_rect,
+                                                Color32::WHITE,
+                                            );
+                                            popup_ui.painter().rect_filled(
+                                                menu_rect,
+                                                8.0,
+                                                Color32::from_rgba_unmultiplied(48, 29, 19, 112),
+                                            );
+                                        }
+                                        Frame::new()
+                                            .fill(if has_status_backdrop {
+                                                Color32::TRANSPARENT
+                                            } else {
+                                                SURFACE
+                                            })
+                                            .stroke(Stroke::new(1.0, LINE))
+                                            .corner_radius(8.0)
+                                            .inner_margin(Margin::same(5))
+                                            .show(popup_ui, |popup_ui| {
+                                                popup_ui.selectable_value(
+                                                    &mut status_reserved,
+                                                    true,
+                                                    "Reservado",
+                                                );
+                                                popup_ui.selectable_value(
+                                                    &mut status_reserved,
+                                                    false,
+                                                    "Rascunho",
+                                                );
+                                            });
                                     });
+                                if !egui::Popup::is_id_open(ui.ctx(), status_popup_id) {
+                                    self.reservation_status_backdrop_texture = None;
+                                }
                             });
 
                         let chip_width =
@@ -2782,11 +2981,15 @@ impl DashboardApp {
                         ui.horizontal(|ui| {
                             reservation_detail_chip(
                                 ui,
+                                &self.icons,
+                                Icon::UsersRound,
                                 &format!("{} hóspedes", item.guests),
                                 chip_width,
                             );
                             reservation_detail_chip(
                                 ui,
+                                &self.icons,
+                                Icon::Cat,
                                 if item.pets { "Com pets" } else { "Sem pets" },
                                 chip_width,
                             );
@@ -2794,6 +2997,8 @@ impl DashboardApp {
                         ui.horizontal(|ui| {
                             reservation_detail_chip(
                                 ui,
+                                &self.icons,
+                                Icon::Coffee,
                                 if item.breakfast {
                                     "Café incluído"
                                 } else {
@@ -2803,6 +3008,8 @@ impl DashboardApp {
                             );
                             reservation_detail_chip(
                                 ui,
+                                &self.icons,
+                                Icon::Balloon,
                                 if item.decoration {
                                     "Com decoração"
                                 } else {
@@ -2817,12 +3024,21 @@ impl DashboardApp {
                             .corner_radius(9.0)
                             .inner_margin(Margin::same(9))
                             .show(ui, |ui| {
-                                ui.label(
-                                    RichText::new("RESTRIÇÕES E OBSERVAÇÕES")
-                                        .size(9.0)
-                                        .strong()
-                                        .color(MUTED),
-                                );
+                                ui.horizontal(|ui| {
+                                    icons::image(
+                                        ui,
+                                        &self.icons,
+                                        Icon::BadgeExclamationPoint,
+                                        13.0,
+                                        MUTED,
+                                    );
+                                    ui.label(
+                                        RichText::new("RESTRIÇÕES E OBSERVAÇÕES")
+                                            .size(9.0)
+                                            .strong()
+                                            .color(MUTED),
+                                    );
+                                });
                                 let details = [
                                     (!item.restrictions.trim().is_empty())
                                         .then_some(item.restrictions.as_str()),
@@ -2843,12 +3059,15 @@ impl DashboardApp {
                                 );
                             });
 
-                        ui.label(
-                            RichText::new("DOCUMENTOS ANEXADOS")
-                                .size(9.0)
-                                .strong()
-                                .color(MUTED),
-                        );
+                        ui.horizontal(|ui| {
+                            icons::image(ui, &self.icons, Icon::FileText, 13.0, MUTED);
+                            ui.label(
+                                RichText::new("DOCUMENTOS ANEXADOS")
+                                    .size(9.0)
+                                    .strong()
+                                    .color(MUTED),
+                            );
+                        });
                         if item.attachments.is_empty() {
                             Frame::new()
                                 .fill(SURFACE_ALT)
@@ -2856,11 +3075,20 @@ impl DashboardApp {
                                 .corner_radius(9.0)
                                 .inner_margin(Margin::same(10))
                                 .show(ui, |ui| {
-                                    ui.label(
-                                        RichText::new("Nenhum documento anexado")
-                                            .size(10.0)
-                                            .color(MUTED),
-                                    );
+                                    ui.horizontal(|ui| {
+                                        icons::image(
+                                            ui,
+                                            &self.icons,
+                                            Icon::FileText,
+                                            14.0,
+                                            MUTED,
+                                        );
+                                        ui.label(
+                                            RichText::new("Nenhum documento anexado")
+                                                .size(10.0)
+                                                .color(MUTED),
+                                        );
+                                    });
                                 });
                         } else {
                             egui::ScrollArea::vertical()
@@ -2875,8 +3103,12 @@ impl DashboardApp {
                                             .show(ui, |ui| {
                                                 ui.set_min_width(ui.available_width());
                                                 ui.horizontal(|ui| {
-                                                    ui.label(
-                                                        RichText::new("▤").size(15.0).color(ORANGE),
+                                                    icons::image(
+                                                        ui,
+                                                        &self.icons,
+                                                        Icon::FileText,
+                                                        16.0,
+                                                        ORANGE,
                                                     );
                                                     ui.vertical(|ui| {
                                                         ui.add_sized(
@@ -4951,20 +5183,42 @@ impl eframe::App for DashboardApp {
         self.tick_scheduled_update(&ctx);
         if let Some(started_at) = self.splash_started_at {
             let elapsed = started_at.elapsed();
-            let total_duration: Duration = self.splash_frames.iter().map(|frame| frame.delay).sum();
-            if elapsed < total_duration {
+            let splash_duration = Duration::from_secs(5);
+            let source_duration: Duration = self.splash_frames.iter().map(|frame| frame.delay).sum();
+            if elapsed < splash_duration {
                 let mut frame_start = Duration::ZERO;
+                let source_elapsed = if source_duration.is_zero() {
+                    Duration::ZERO
+                } else {
+                    Duration::from_secs_f64(
+                        elapsed.as_secs_f64() * source_duration.as_secs_f64()
+                            / splash_duration.as_secs_f64(),
+                    )
+                };
                 let frame_index = self
                     .splash_frames
                     .iter()
                     .position(|frame| {
                         frame_start += frame.delay;
-                        elapsed < frame_start
+                        source_elapsed < frame_start
                     })
                     .unwrap_or_else(|| self.splash_frames.len().saturating_sub(1));
                 self.show_startup_splash(root, frame_index);
-                if let Some(frame) = self.splash_frames.get(frame_index) {
-                    ctx.request_repaint_after(frame.delay.min(total_duration - elapsed));
+                if self.splash_frames.get(frame_index).is_some() {
+                    let source_until_next = frame_start.saturating_sub(source_elapsed);
+                    let scaled_delay = if source_duration.is_zero() {
+                        Duration::from_millis(16)
+                    } else {
+                        Duration::from_secs_f64(
+                            source_until_next.as_secs_f64() * splash_duration.as_secs_f64()
+                                / source_duration.as_secs_f64(),
+                        )
+                    };
+                    ctx.request_repaint_after(
+                        scaled_delay
+                            .max(Duration::from_millis(16))
+                            .min(splash_duration - elapsed),
+                    );
                 }
                 return;
             }
@@ -5910,14 +6164,23 @@ fn attachment_metadata(path: &str) -> String {
     format!("{kind} · {size_label}")
 }
 
-fn reservation_detail_chip(ui: &mut egui::Ui, label: &str, width: f32) {
+fn reservation_detail_chip(
+    ui: &mut egui::Ui,
+    textures: &HashMap<Icon, TextureHandle>,
+    icon: Icon,
+    label: &str,
+    width: f32,
+) {
     Frame::new()
         .fill(SURFACE_ALT)
         .corner_radius(7.0)
         .inner_margin(Margin::symmetric(8, 6))
         .show(ui, |ui| {
             ui.set_width((width - 16.0).max(120.0));
-            ui.label(RichText::new(label).size(9.0).strong().color(INK));
+            ui.horizontal(|ui| {
+                icons::image(ui, textures, icon, 12.0, MUTED);
+                ui.label(RichText::new(label).size(9.0).strong().color(INK));
+            });
         });
 }
 

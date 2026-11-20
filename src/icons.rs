@@ -35,6 +35,14 @@ pub enum Icon {
     Maximize,
     X,
     OctagonExclamationPoint,
+    DoorOpen,
+    DoorClosed,
+    UsersRound,
+    Cat,
+    Coffee,
+    Balloon,
+    BadgeExclamationPoint,
+    FileText,
 }
 
 pub fn load(ctx: &egui::Context) -> HashMap<Icon, TextureHandle> {
@@ -123,6 +131,26 @@ pub fn load(ctx: &egui::Context) -> HashMap<Icon, TextureHandle> {
         (
             Icon::OctagonExclamationPoint,
             include_str!("../assets/lucide/octagon-exclamation-point.svg"),
+        ),
+        (Icon::DoorOpen, include_str!("../assets/lucide/door-open.svg")),
+        (
+            Icon::DoorClosed,
+            include_str!("../assets/lucide/door-closed.svg"),
+        ),
+        (
+            Icon::UsersRound,
+            include_str!("../assets/lucide/users-round.svg"),
+        ),
+        (Icon::Cat, include_str!("../assets/lucide/cat.svg")),
+        (Icon::Coffee, include_str!("../assets/lucide/coffee.svg")),
+        (Icon::Balloon, include_str!("../assets/lucide/balloon.svg")),
+        (
+            Icon::BadgeExclamationPoint,
+            include_str!("../assets/lucide/badge-exclamation-point.svg"),
+        ),
+        (
+            Icon::FileText,
+            include_str!("../assets/lucide/file-text.svg"),
         ),
     ]
     .into_iter()
