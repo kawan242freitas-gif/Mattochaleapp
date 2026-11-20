@@ -358,7 +358,7 @@ impl DashboardApp {
                 .first()
                 .map(|frame| frame.delay)
                 .unwrap_or(Duration::from_secs(1));
-        let splash_frames = load_splash_animation(&cc.egui_ctx);
+        let splash_frames = load_splash_image(&cc.egui_ctx);
         let hero_texture = load_texture(
             &cc.egui_ctx,
             "chalet-forest-header",
@@ -2140,8 +2140,8 @@ impl DashboardApp {
                 // Reserve room for the four summary cards so the calendar can't push them
                 // below the visible area. Shrink day cells on shorter windows.
                 let (min_calendar_height, max_calendar_height, min_cell_height, max_cell_height) =
-                    if self.preferences.compact_calendar { (282.0, 410.0, 34.0, 54.0) } else { (328.0, 486.0, 42.0, 68.0) };
-                let calendar_height = (ui.available_height() - 100.0).clamp(min_calendar_height, max_calendar_height);
+                    if self.preferences.compact_calendar { (282.0, 434.0, 34.0, 58.0) } else { (328.0, 510.0, 42.0, 72.0) };
+                let calendar_height = (ui.available_height() - 76.0).clamp(min_calendar_height, max_calendar_height);
                 let calendar_cell_height = ((calendar_height - 78.0) / 6.0).clamp(min_cell_height, max_cell_height);
                 let month_prefix = format!("{:04}-{:02}-", self.year, self.month);
                 let blocked = self
@@ -2193,7 +2193,7 @@ impl DashboardApp {
                         ui.set_width(calendar_width);
                         ui.spacing_mut().item_spacing.y = 0.0;
                         self.calendar_panel(ui, calendar_cell_height);
-                        ui.add_space(24.0);
+                        ui.add_space(34.0);
                         let card_gap = 5.0;
                         let card_width = ((calendar_width - card_gap * 3.0) / 4.0).max(80.0);
                         ui.allocate_ui_with_layout(
@@ -2822,9 +2822,40 @@ impl DashboardApp {
                         .color(MUTED),
                     );
                 });
+                let mut remove_attachment_at = None;
                 for (index, path) in self.reservation_form.attachments.iter().enumerate() {
                     let name = self.reservation_form.attachment_names.get(index).map(String::as_str).unwrap_or_else(|| file_name(path));
-                    ui.label(RichText::new(name).size(9.0).color(MUTED));
+                    Frame::new()
+                        .fill(SURFACE_ALT)
+                        .stroke(Stroke::new(1.0, LINE))
+                        .corner_radius(8.0)
+                        .inner_margin(Margin::symmetric(9, 6))
+                        .show(ui, |ui| {
+                            ui.set_width(ui.available_width());
+                            ui.horizontal(|ui| {
+                                icons::image(ui, &self.icons, Icon::FileText, 17.0, ORANGE);
+                                ui.vertical(|ui| {
+                                    ui.label(RichText::new(name).size(10.0).color(INK));
+                                    ui.label(RichText::new(attachment_metadata(path)).size(8.5).color(MUTED));
+                                });
+                                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                    let remove = ui.add(
+                                        egui::Button::new(RichText::new("Remover").size(9.0).color(INK))
+                                            .fill(RED_PALE)
+                                            .stroke(Stroke::new(1.0, RED))
+                                            .corner_radius(7.0),
+                                    );
+                                    if remove.clicked() { remove_attachment_at = Some(index); }
+                                });
+                            });
+                        });
+                    ui.add_space(4.0);
+                }
+                if let Some(index) = remove_attachment_at {
+                    self.reservation_form.attachments.remove(index);
+                    if index < self.reservation_form.attachment_names.len() {
+                        self.reservation_form.attachment_names.remove(index);
+                    }
                 }
                 if let Some(error) = &self.notice {
                     ui.label(RichText::new(error).size(10.0).color(RED));
@@ -5605,17 +5636,12 @@ impl DashboardApp {
 
     fn select_day(&mut self, day: u32) {
         self.selected_calendar_day = date_key(self.year, self.month, day);
-        self.selected_range = match self.selected_range {
-            Some((start, end)) if start != end => Some((day, day)),
-            Some((start, _)) => Some((start.min(day), start.max(day))),
-            None => Some((day, day)),
-        };
+        self.selected_range = Some((day, day));
         self.notice = None;
     }
 
     fn day_selected(&self, day: u32) -> bool {
-        self.selected_range
-            .is_some_and(|(start, end)| (start..=end).contains(&day))
+        self.selected_range.is_some_and(|(start, end)| start == day && end == day)
     }
 
     fn day_status(&self, day: u32) -> DayStatus {
@@ -5635,12 +5661,7 @@ impl DashboardApp {
             Some((start, end)) if start == end => {
                 format!("{} de {}", start, month_name(self.month).to_lowercase())
             }
-            Some((start, end)) => format!(
-                "{} a {} de {}",
-                start,
-                end,
-                month_name(self.month).to_lowercase()
-            ),
+            Some((day, _)) => format!("{} de {}", day, month_name(self.month).to_lowercase()),
             None => "Selecione as datas no calendário".to_owned(),
         }
     }
@@ -5699,7 +5720,7 @@ impl DashboardApp {
         } else {
             self.month -= 1;
         }
-        self.selected_range = None;
+        self.selected_range = Some((1, 1));
         self.selected_calendar_day = date_key(self.year, self.month, 1);
     }
 
@@ -5710,7 +5731,7 @@ impl DashboardApp {
         } else {
             self.month += 1;
         }
-        self.selected_range = None;
+        self.selected_range = Some((1, 1));
         self.selected_calendar_day = date_key(self.year, self.month, 1);
     }
 
@@ -5850,41 +5871,26 @@ impl eframe::App for DashboardApp {
     }
 }
 
-fn load_splash_animation(ctx: &egui::Context) -> Vec<ProfileFrame> {
-    let bytes = include_bytes!("../assets/splash-matto-chales.gif");
-    image::codecs::gif::GifDecoder::new(Cursor::new(bytes.as_slice()))
-        .ok()
-        .and_then(|decoder| image::AnimationDecoder::into_frames(decoder).collect_frames().ok())
-        .unwrap_or_default()
-        .into_iter()
-        .take(120)
-        .enumerate()
-        .map(|(index, frame)| {
-            let (numerator, denominator) = frame.delay().numer_denom_ms();
-            let delay_ms = if denominator == 0 {
-                42
-            } else {
-                (numerator / denominator).max(30)
-            };
-            let image = frame.into_buffer();
-            let size = [image.width() as usize, image.height() as usize];
-            ProfileFrame {
-                texture: ctx.load_texture(
-                    format!("matto-startup-splash-{index}"),
-                    egui::ColorImage::from_rgba_unmultiplied(size, image.as_raw()),
-                    egui::TextureOptions::LINEAR,
-                ),
-                delay: Duration::from_millis(u64::from(delay_ms)),
-            }
-        })
-        .collect()
+fn load_splash_image(ctx: &egui::Context) -> Vec<ProfileFrame> {
+    let Ok(image) = image::load_from_memory(include_bytes!("../assets/splash-matto-chales.png"))
+    else { return Vec::new(); };
+    let image = image.to_rgba8();
+    let size = [image.width() as usize, image.height() as usize];
+    vec![ProfileFrame {
+        texture: ctx.load_texture(
+            "matto-startup-splash",
+            egui::ColorImage::from_rgba_unmultiplied(size, image.as_raw()),
+            egui::TextureOptions::LINEAR,
+        ),
+        delay: Duration::from_secs(5),
+    }]
 }
 
 impl DashboardApp {
     fn show_startup_splash(&self, root: &mut egui::Ui, frame_index: usize) {
         let bounds = root.max_rect();
         root.painter()
-            .rect_filled(bounds, 0.0, Color32::from_rgb(8, 17, 13));
+            .rect_filled(bounds, 0.0, Color32::BLACK);
         let Some(frame) = self.splash_frames.get(frame_index) else {
             return;
         };
