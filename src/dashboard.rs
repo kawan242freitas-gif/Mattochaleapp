@@ -287,6 +287,8 @@ pub struct DashboardApp {
     profile_frames: Vec<ProfileFrame>,
     profile_frame_index: usize,
     next_profile_frame: Instant,
+    splash_frames: Vec<ProfileFrame>,
+    splash_started_at: Option<Instant>,
     settings_page: SettingsPage,
     settings_notice: Option<String>,
     admin_token: String,
@@ -303,6 +305,11 @@ pub struct DashboardApp {
     update_busy: bool,
     update_progress: u8,
     update_message: Option<String>,
+    update_prompt_open: bool,
+    update_auto_install_at: Option<Instant>,
+    downloaded_update: Option<(PathBuf, String)>,
+    update_install_when_downloaded: bool,
+    next_update_check: Instant,
 }
 
 impl DashboardApp {
@@ -319,6 +326,7 @@ impl DashboardApp {
                 .first()
                 .map(|frame| frame.delay)
                 .unwrap_or(Duration::from_secs(1));
+        let splash_frames = load_splash_animation(&cc.egui_ctx);
         let hero_texture = load_texture(
             &cc.egui_ctx,
             "chalet-forest-header",
@@ -416,6 +424,8 @@ impl DashboardApp {
             profile_frames,
             profile_frame_index: 0,
             next_profile_frame,
+            splash_frames,
+            splash_started_at: Some(Instant::now()),
             settings_page: SettingsPage::Loja,
             settings_notice: None,
             admin_token: String::new(),
@@ -432,6 +442,11 @@ impl DashboardApp {
             update_busy: false,
             update_progress: 0,
             update_message: None,
+            update_prompt_open: false,
+            update_auto_install_at: None,
+            downloaded_update: None,
+            update_install_when_downloaded: true,
+            next_update_check: Instant::now() + Duration::from_secs(300),
         };
         app.request_products(cc.egui_ctx.clone());
         app.request_update_check(cc.egui_ctx.clone());
@@ -447,12 +462,13 @@ impl DashboardApp {
         });
     }
 
-    fn start_update_download(&mut self, ctx: egui::Context) {
+    fn start_update_download(&mut self, ctx: egui::Context, install_when_ready: bool) {
         let Some(update) = self.update_available.clone() else {
             return;
         };
         self.update_busy = true;
         self.update_progress = 0;
+        self.update_install_when_downloaded = install_when_ready;
         self.update_message = Some(format!("Baixando atualização {}…", update.version));
         let tx = self.tx.clone();
         thread::spawn(move || {
@@ -490,33 +506,30 @@ impl DashboardApp {
                 }
                 Event::UpdateChecked(Ok(update)) => {
                     self.update_available = update;
+                    self.next_update_check = Instant::now() + Duration::from_secs(300);
                 }
                 Event::UpdateChecked(Err(error)) => {
                     self.update_message =
                         Some(format!("Não foi possível verificar atualizações: {error}"));
+                    self.next_update_check = Instant::now() + Duration::from_secs(300);
                 }
                 Event::UpdateProgress(percent) => {
                     self.update_progress = percent;
                 }
                 Event::UpdateDownloaded(Ok((path, version))) => {
                     self.update_progress = 100;
-                    self.update_message = Some("Aplicando atualização…".to_owned());
-                    let launched = std::process::Command::new(path)
-                        .arg("--apply-update")
-                        .arg(std::process::id().to_string())
-                        .arg(version)
-                        .spawn();
-                    match launched {
-                        Ok(_) => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
-                        Err(error) => {
-                            self.update_busy = false;
-                            self.update_message =
-                                Some(format!("Falha ao iniciar a atualização: {error}"));
-                        }
+                    if self.update_install_when_downloaded {
+                        self.launch_update_installer(ctx, path, version);
+                    } else {
+                        self.update_busy = false;
+                        self.update_message =
+                            Some("Atualização pronta para instalação automática.".to_owned());
+                        self.downloaded_update = Some((path, version));
                     }
                 }
                 Event::UpdateDownloaded(Err(error)) => {
                     self.update_busy = false;
+                    self.update_auto_install_at = None;
                     self.update_message = Some(format!("Falha ao baixar atualização: {error}"));
                 }
                 Event::Products(Err(error)) => {
@@ -584,6 +597,153 @@ impl DashboardApp {
         }
     }
 
+    fn launch_update_installer(&mut self, ctx: &egui::Context, path: PathBuf, version: String) {
+        self.update_message = Some("Aplicando atualização…".to_owned());
+        match std::process::Command::new(path)
+            .arg("--apply-update")
+            .arg(std::process::id().to_string())
+            .arg(version)
+            .spawn()
+        {
+            Ok(_) => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+            Err(error) => {
+                self.update_busy = false;
+                self.update_auto_install_at = None;
+                self.update_message = Some(format!("Falha ao iniciar a atualização: {error}"));
+            }
+        }
+    }
+
+    fn tick_scheduled_update(&mut self, ctx: &egui::Context) {
+        let Some(install_at) = self.update_auto_install_at else {
+            return;
+        };
+        if Instant::now() >= install_at {
+            if let Some((path, version)) = self.downloaded_update.take() {
+                self.update_auto_install_at = None;
+                self.update_busy = true;
+                self.launch_update_installer(ctx, path, version);
+            } else {
+                ctx.request_repaint_after(Duration::from_millis(500));
+            }
+        } else {
+            ctx.request_repaint_after(Duration::from_secs(1));
+        }
+    }
+
+    fn show_update_prompt(&mut self, ctx: &egui::Context) {
+        if !self.update_prompt_open {
+            return;
+        }
+        let Some(update) = &self.update_available else {
+            self.update_prompt_open = false;
+            return;
+        };
+        let version = update.version.clone();
+        let mut open = self.update_prompt_open;
+        let mut close_prompt = false;
+        egui::Window::new("Nova Atualização")
+            .id(egui::Id::new("new-update-prompt"))
+            .collapsible(false)
+            .resizable(false)
+            .default_width(360.0)
+            .fixed_size(Vec2::new(360.0, 165.0))
+            .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
+            .open(&mut open)
+            .frame(
+                Frame::new()
+                    .fill(SURFACE)
+                    .stroke(Stroke::new(1.0, LINE))
+                    .corner_radius(12)
+                    .inner_margin(Margin::same(18)),
+            )
+            .show(ctx, |ui| {
+                ui.label(
+                    RichText::new(format!(
+                        "Nova versão {version} disponível. Deseja instalar agora?"
+                    ))
+                    .size(15.0)
+                    .color(INK),
+                );
+                if self.update_busy {
+                    ui.add_space(8.0);
+                    ui.label(
+                        RichText::new(format!("Baixando atualização: {}%", self.update_progress))
+                            .color(MUTED),
+                    );
+                    if let Some(at) = self.update_auto_install_at {
+                        ui.label(
+                            RichText::new(format!(
+                                "Instalação automática em {}.",
+                                format_countdown(at.saturating_duration_since(Instant::now()))
+                            ))
+                            .color(MUTED),
+                        );
+                    }
+                } else {
+                    ui.add_space(22.0);
+                    ui.horizontal(|ui| {
+                        if self.text_button(ui, Icon::ArrowRight, "Sim", 148.0, 38.0) {
+                            close_prompt = true;
+                            self.update_prompt_open = false;
+                            self.update_auto_install_at = None;
+                            self.downloaded_update = None;
+                            self.start_update_download(ctx.clone(), true);
+                        }
+                        if self.text_button(ui, Icon::X, "Não", 148.0, 38.0) {
+                            close_prompt = true;
+                            self.update_prompt_open = false;
+                            self.update_auto_install_at =
+                                Some(Instant::now() + Duration::from_secs(600));
+                            self.downloaded_update = None;
+                            self.update_message = Some(
+                                "A atualização será instalada automaticamente em 10 minutos."
+                                    .to_owned(),
+                            );
+                            self.start_update_download(ctx.clone(), false);
+                        }
+                    });
+                }
+            });
+        self.update_prompt_open = open && !close_prompt;
+    }
+
+    fn show_update_notice(&self, ctx: &egui::Context) {
+        let Some(install_at) = self.update_auto_install_at else {
+            return;
+        };
+        let remaining = install_at.saturating_duration_since(Instant::now());
+        egui::Area::new(egui::Id::new("scheduled-update-notice"))
+            .anchor(Align2::RIGHT_TOP, Vec2::new(-18.0, 70.0))
+            .order(egui::Order::Foreground)
+            .show(ctx, |ui| {
+                Frame::new()
+                    .fill(Color32::from_rgb(49, 31, 20))
+                    .stroke(Stroke::new(1.0, Color32::from_rgb(147, 80, 39)))
+                    .corner_radius(9.0)
+                    .inner_margin(Margin::symmetric(12, 8))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new("Atualização agendada").strong().color(INK));
+                            ui.label(
+                                RichText::new(format!(
+                                    "Instalação em {}",
+                                    format_countdown(remaining)
+                                ))
+                                .color(MUTED),
+                            );
+                        });
+                    });
+            });
+        ctx.request_repaint_after(Duration::from_secs(1));
+    }
+
+    fn update_indicator(&self, ctx: &egui::Context) -> (Color32, f32) {
+        let phase = ctx.input(|input| input.time);
+        let pulse = ((phase * 3.8).sin() * 0.5 + 0.5) as f32;
+        (Color32::from_rgb(247, 72, 64), pulse)
+    }
+
     fn request_product_image(&mut self, product: &Product, ctx: egui::Context) {
         let Some(url) = product.image_url.as_deref() else {
             return;
@@ -626,7 +786,10 @@ impl DashboardApp {
                 let rect = ui.max_rect();
                 let drag_rect = Rect::from_min_max(
                     rect.min,
-                    Pos2::new(rect.right() - if launcher { 205.0 } else { 145.0 }, rect.bottom()),
+                    Pos2::new(
+                        rect.right() - if launcher { 205.0 } else { 145.0 },
+                        rect.bottom(),
+                    ),
                 );
                 let drag = ui.interact(drag_rect, ui.scope_id().with("window-drag"), Sense::drag());
                 if drag.drag_started() {
@@ -742,8 +905,14 @@ impl DashboardApp {
                                                     .strong()
                                                     .color(ORANGE),
                                             );
-                                            changelog_item(ui, "Seletores de datas e horários com rolagem.");
-                                            changelog_item(ui, "Fundo desfocado ao abrir uma reserva.");
+                                            changelog_item(
+                                                ui,
+                                                "Seletores de datas e horários com rolagem.",
+                                            );
+                                            changelog_item(
+                                                ui,
+                                                "Fundo desfocado ao abrir uma reserva.",
+                                            );
                                             ui.add_space(5.0);
                                             ui.label(
                                                 RichText::new("INTERFACE")
@@ -751,8 +920,14 @@ impl DashboardApp {
                                                     .strong()
                                                     .color(ORANGE),
                                             );
-                                            changelog_item(ui, "Filtro de chalés com visual translúcido.");
-                                            changelog_item(ui, "Ajustes na pílula do perfil e no calendário.");
+                                            changelog_item(
+                                                ui,
+                                                "Filtro de chalés com visual translúcido.",
+                                            );
+                                            changelog_item(
+                                                ui,
+                                                "Ajustes na pílula do perfil e no calendário.",
+                                            );
                                         });
                                 });
                         }
@@ -810,64 +985,100 @@ impl DashboardApp {
                             Pos2::new(name_left + name_width + 10.0, capsule.center().y),
                             Vec2::splat(16.0),
                         );
-                        icons::paint_in_rect(
-                            ui,
-                            &self.icons,
-                            Icon::ChevronDown,
-                            chevron_rect,
-                            MUTED,
-                        );
+                        let update_pending = self.update_available.is_some();
+                        if update_pending {
+                            let (red, pulse) = self.update_indicator(&ctx);
+                            painter.circle_stroke(
+                                chevron_rect.center(),
+                                10.0 + pulse * 2.5,
+                                Stroke::new(
+                                    1.2,
+                                    Color32::from_rgba_unmultiplied(
+                                        247,
+                                        72,
+                                        64,
+                                        (pulse * 130.0) as u8,
+                                    ),
+                                ),
+                            );
+                            icons::paint_in_rect(
+                                ui,
+                                &self.icons,
+                                Icon::OctagonExclamationPoint,
+                                chevron_rect,
+                                red,
+                            );
+                            ctx.request_repaint_after(Duration::from_millis(70));
+                        } else {
+                            icons::paint_in_rect(
+                                ui,
+                                &self.icons,
+                                Icon::ChevronDown,
+                                chevron_rect,
+                                MUTED,
+                            );
+                        }
                         let profile_response = ui.interact(
                             capsule,
                             ui.scope_id().with("profile-functions-menu-button"),
                             Sense::click(),
                         );
-                        profile_response.clone().on_hover_text("Abrir menu");
-                        egui::Popup::menu(&profile_response)
-                            .id(egui::Id::new("profile-functions-menu"))
-                            .align(egui::RectAlign::BOTTOM)
-                            .gap(2.0)
-                            .width(170.0)
-                            .style(egui::style::StyleModifier::new(|style| {
-                                style.visuals.window_fill = SURFACE;
-                                style.visuals.window_stroke = Stroke::new(1.0, LINE);
-                            }))
-                            .show(|menu_ui| {
-                                Frame::new()
-                                    .fill(SURFACE)
-                                    .stroke(Stroke::new(1.0, LINE))
-                                    .corner_radius(10.0)
-                                    .inner_margin(Margin::same(8))
-                                    .show(menu_ui, |menu_ui| {
-                                        if profile_menu_item(
-                                            menu_ui,
-                                            &self.icons,
-                                            Icon::Sofa,
-                                            "Home",
-                                            self.section == Section::Reservas,
-                                        ) {
-                                            self.section = Section::Reservas;
-                                        }
-                                        if profile_menu_item(
-                                            menu_ui,
-                                            &self.icons,
-                                            Icon::ReceiptText,
-                                            "Financeiro",
-                                            self.section == Section::Financas,
-                                        ) {
-                                            self.section = Section::Financas;
-                                        }
-                                        if profile_menu_item(
-                                            menu_ui,
-                                            &self.icons,
-                                            Icon::SettingsMenu,
-                                            "Configurações",
-                                            self.section == Section::Configuracoes,
-                                        ) {
-                                            self.section = Section::Configuracoes;
-                                        }
-                                    });
-                            });
+                        profile_response.clone().on_hover_text(if update_pending {
+                            "Nova atualização disponível"
+                        } else {
+                            "Abrir menu"
+                        });
+                        if update_pending {
+                            if profile_response.clicked() {
+                                self.update_prompt_open = true;
+                            }
+                        } else {
+                            egui::Popup::menu(&profile_response)
+                                .id(egui::Id::new("profile-functions-menu"))
+                                .align(egui::RectAlign::BOTTOM)
+                                .gap(2.0)
+                                .width(170.0)
+                                .style(egui::style::StyleModifier::new(|style| {
+                                    style.visuals.window_fill = SURFACE;
+                                    style.visuals.window_stroke = Stroke::new(1.0, LINE);
+                                }))
+                                .show(|menu_ui| {
+                                    Frame::new()
+                                        .fill(SURFACE)
+                                        .stroke(Stroke::new(1.0, LINE))
+                                        .corner_radius(10.0)
+                                        .inner_margin(Margin::same(8))
+                                        .show(menu_ui, |menu_ui| {
+                                            if profile_menu_item(
+                                                menu_ui,
+                                                &self.icons,
+                                                Icon::Sofa,
+                                                "Home",
+                                                self.section == Section::Reservas,
+                                            ) {
+                                                self.section = Section::Reservas;
+                                            }
+                                            if profile_menu_item(
+                                                menu_ui,
+                                                &self.icons,
+                                                Icon::ReceiptText,
+                                                "Financeiro",
+                                                self.section == Section::Financas,
+                                            ) {
+                                                self.section = Section::Financas;
+                                            }
+                                            if profile_menu_item(
+                                                menu_ui,
+                                                &self.icons,
+                                                Icon::SettingsMenu,
+                                                "Configurações",
+                                                self.section == Section::Configuracoes,
+                                            ) {
+                                                self.section = Section::Configuracoes;
+                                            }
+                                        });
+                                });
+                        }
                     }
                 });
             });
@@ -900,6 +1111,7 @@ impl DashboardApp {
     }
 
     fn show_launcher(&mut self, root: &mut egui::Ui) {
+        let ctx = root.ctx().clone();
         const NIGHT: Color32 = Color32::from_rgb(19, 12, 8);
         const RAIL: Color32 = Color32::from_rgb(28, 18, 12);
         const TEXT: Color32 = Color32::from_rgb(246, 235, 215);
@@ -1046,7 +1258,40 @@ impl DashboardApp {
                             Sense::click(),
                         )
                     };
-                if profile_response.on_hover_text("Configurações").clicked() {
+                if self.update_available.is_some() {
+                    let (red, pulse) = self.update_indicator(&ctx);
+                    let badge_center = Pos2::new(
+                        profile_capsule.right() - 7.0,
+                        profile_capsule.bottom() - 7.0,
+                    );
+                    painter.circle_stroke(
+                        badge_center,
+                        9.0 + pulse * 2.0,
+                        Stroke::new(
+                            1.2,
+                            Color32::from_rgba_unmultiplied(247, 72, 64, (pulse * 130.0) as u8),
+                        ),
+                    );
+                    icons::paint_in_rect(
+                        ui,
+                        &self.icons,
+                        Icon::OctagonExclamationPoint,
+                        Rect::from_center_size(badge_center, Vec2::splat(18.0)),
+                        red,
+                    );
+                    let update_response = ui.interact(
+                        profile_capsule,
+                        ui.scope_id().with("launcher-update-profile-button"),
+                        Sense::click(),
+                    );
+                    if update_response
+                        .on_hover_text("Nova atualização disponível")
+                        .clicked()
+                    {
+                        self.update_prompt_open = true;
+                    }
+                    ctx.request_repaint_after(Duration::from_millis(70));
+                } else if profile_response.on_hover_text("Configurações").clicked() {
                     self.section = Section::Configuracoes;
                 }
 
@@ -1234,7 +1479,7 @@ impl DashboardApp {
                 if button.clicked() {
                     if update_mode {
                         if !self.update_busy {
-                            self.start_update_download(ui.ctx().clone());
+                            self.update_prompt_open = true;
                         }
                     } else {
                         open_module = Some(self.launcher_module);
@@ -1540,10 +1785,14 @@ impl DashboardApp {
                         let popup_was_open = egui::Popup::is_id_open(ui.ctx(), popup_id);
                         let response = ui.add_sized(
                             Vec2::new(142.0, 34.0),
-                            egui::Button::new(RichText::new(&self.calendar_chalet_filter).size(12.0).color(TEXT))
-                                .fill(SURFACE)
-                                .stroke(Stroke::new(1.0, BORDER))
-                                .corner_radius(8.0),
+                            egui::Button::new(
+                                RichText::new(&self.calendar_chalet_filter)
+                                    .size(12.0)
+                                    .color(TEXT),
+                            )
+                            .fill(SURFACE)
+                            .stroke(Stroke::new(1.0, BORDER))
+                            .corner_radius(8.0),
                         );
                         icons::paint_in_rect(
                             ui,
@@ -1560,21 +1809,31 @@ impl DashboardApp {
                                 let size = [backdrop.width() as usize, backdrop.height() as usize];
                                 self.chalet_filter_backdrop_texture = Some(ui.ctx().load_texture(
                                     "reservation-chalet-filter-backdrop",
-                                    egui::ColorImage::from_rgba_unmultiplied(size, backdrop.as_raw()),
+                                    egui::ColorImage::from_rgba_unmultiplied(
+                                        size,
+                                        backdrop.as_raw(),
+                                    ),
                                     egui::TextureOptions::LINEAR,
                                 ));
                             }
                         } else if response.clicked() {
                             self.chalet_filter_backdrop_texture = None;
                         }
+                        let has_blurred_backdrop = self.chalet_filter_backdrop_texture.is_some();
                         egui::Popup::menu(&response)
                             .id(popup_id)
                             .width(170.0)
-                            .style(egui::style::StyleModifier::new(|style| {
+                            .style(egui::style::StyleModifier::new(move |style| {
                                 style.visuals.window_fill =
-                                    Color32::from_rgba_unmultiplied(49, 30, 20, 185);
-                                style.visuals.window_stroke =
-                                    Stroke::new(1.0, Color32::from_rgba_unmultiplied(190, 120, 68, 190));
+                                    if has_blurred_backdrop {
+                                        Color32::TRANSPARENT
+                                    } else {
+                                        Color32::from_rgb(49, 30, 20)
+                                    };
+                                style.visuals.window_stroke = Stroke::new(
+                                    1.0,
+                                    Color32::from_rgba_unmultiplied(190, 120, 68, 190),
+                                );
                                 style.visuals.widgets.noninteractive.bg_fill = Color32::TRANSPARENT;
                                 style.visuals.widgets.inactive.bg_fill = Color32::TRANSPARENT;
                                 style.visuals.widgets.hovered.bg_fill =
@@ -1585,15 +1844,18 @@ impl DashboardApp {
                             .show(|popup_ui| {
                                 if let Some(texture) = &self.chalet_filter_backdrop_texture {
                                     let viewport = popup_ui.ctx().content_rect();
-                                    let menu_rect = popup_ui.max_rect().expand(8.0).intersect(viewport);
+                                    let menu_rect =
+                                        popup_ui.max_rect().expand(8.0).intersect(viewport);
                                     let uv_rect = Rect::from_min_max(
                                         Pos2::new(
                                             (menu_rect.left() - viewport.left()) / viewport.width(),
                                             (menu_rect.top() - viewport.top()) / viewport.height(),
                                         ),
                                         Pos2::new(
-                                            (menu_rect.right() - viewport.left()) / viewport.width(),
-                                            (menu_rect.bottom() - viewport.top()) / viewport.height(),
+                                            (menu_rect.right() - viewport.left())
+                                                / viewport.width(),
+                                            (menu_rect.bottom() - viewport.top())
+                                                / viewport.height(),
                                         ),
                                     );
                                     popup_ui.painter().image(
@@ -1605,7 +1867,7 @@ impl DashboardApp {
                                     popup_ui.painter().rect_filled(
                                         menu_rect,
                                         8.0,
-                                        Color32::from_rgba_unmultiplied(48, 29, 19, 86),
+                                        Color32::from_rgba_unmultiplied(48, 29, 19, 105),
                                     );
                                 }
                                 popup_ui.selectable_value(
@@ -1672,21 +1934,24 @@ impl DashboardApp {
 
                 ui.add_space(10.0);
                 let calendar_width = (ui.available_width() - 342.0).max(520.0);
+                // Reserve room for the four summary cards so the calendar can't push them
+                // below the visible area. Shrink day cells on shorter windows.
+                let calendar_height = (ui.available_height() - 100.0).clamp(328.0, 486.0);
+                let calendar_cell_height = ((calendar_height - 78.0) / 6.0).clamp(42.0, 68.0);
                 ui.horizontal_top(|ui| {
                     ui.allocate_ui_with_layout(
-                        Vec2::new(calendar_width, ui.available_height()),
+                        Vec2::new(calendar_width, calendar_height),
                         Layout::top_down(Align::Min),
-                        |ui| self.calendar_panel(ui),
+                        |ui| self.calendar_panel(ui, calendar_cell_height),
                     );
                     ui.separator();
                     ui.allocate_ui_with_layout(
-                        Vec2::new(320.0, ui.available_height()),
+                        Vec2::new(320.0, calendar_height),
                         Layout::top_down(Align::Min),
                         |ui| self.reservation_day_panel(ui),
                     );
                 });
 
-                ui.add_space(12.0);
                 let month_prefix = format!("{:04}-{:02}-", self.year, self.month);
                 let blocked = self
                     .blocked_dates
@@ -1732,16 +1997,26 @@ impl DashboardApp {
                         TEXT,
                     ),
                 ];
-                let gap = 8.0;
-                let card_width = ((ui.available_width() - gap * 3.0) / 4.0).max(120.0);
-                ui.horizontal(|ui| {
-                    for (index, (label, value, caption, color)) in metrics.into_iter().enumerate() {
-                        self.reservation_metric(ui, label, &value, caption, color, card_width);
-                        if index < 3 {
-                            ui.add_space(gap);
+                ui.add_space(5.0);
+                let card_gap = 5.0;
+                let card_width = ((calendar_width - card_gap * 3.0) / 4.0).max(80.0);
+                ui.allocate_ui_with_layout(
+                    Vec2::new(calendar_width, 62.0),
+                    Layout::left_to_right(Align::Min),
+                    |cards_ui| {
+                        cards_ui.spacing_mut().item_spacing.x = card_gap;
+                        for (label, value, caption, color) in metrics {
+                            self.reservation_metric(
+                                cards_ui,
+                                label,
+                                &value,
+                                caption,
+                                color,
+                                card_width,
+                            );
                         }
-                    }
-                });
+                    },
+                );
 
                 if let Some(notice) = &self.notice {
                     ui.add_space(8.0);
@@ -1752,7 +2027,7 @@ impl DashboardApp {
         self.reservation_windows(ui.ctx());
     }
 
-    fn calendar_panel(&mut self, ui: &mut egui::Ui) {
+    fn calendar_panel(&mut self, ui: &mut egui::Ui, cell_height: f32) {
         const PANEL: Color32 = Color32::from_rgb(34, 21, 14);
         const BORDER: Color32 = Color32::from_rgb(94, 58, 32);
         const TEXT: Color32 = Color32::from_rgb(246, 231, 207);
@@ -1770,7 +2045,6 @@ impl DashboardApp {
                 let weekdays = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
                 let spacing = Vec2::new(6.0, 6.0);
                 let cell_width = ((ui.available_width() - spacing.x * 6.0) / 7.0).max(48.0);
-                let cell_height = 68.0;
                 let first_weekday = (weekday_monday(self.year, self.month) + 6) % 7;
                 let current_days = days_in_month(self.year, self.month);
                 let (previous_year, previous_month) = if self.month == 1 {
@@ -2173,69 +2447,184 @@ impl DashboardApp {
             let mut open = self.reservation_form_open;
             let mut save = false;
             let mut cancel = false;
-            egui::Window::new(if self.editing_reservation_id.is_some() { "Editar reserva" } else { "Nova reserva" })
-                .id(egui::Id::new("reservation-editor"))
-                .open(&mut open)
-                .collapsible(false)
-                .resizable(false)
-                .fixed_pos(ctx.content_rect().center())
-                .pivot(Align2::CENTER_CENTER)
-                .fixed_size(Vec2::new(700.0, 820.0))
-                .show(ctx, |ui| {
-                    ui.spacing_mut().item_spacing.y = 4.0;
-                    ui.label(RichText::new("MARQUE UMA NOVA ESTADIA").size(10.0).strong().color(ORANGE));
-                    ui.label("Nome do responsável");
-                    ui.text_edit_singleline(&mut self.reservation_form.responsible);
-                    ui.horizontal(|ui| {
-                        ui.vertical(|ui| {
-                            ui.label("Chalé");
-                            egui::ComboBox::from_id_salt("reservation-form-chalet").selected_text(&self.reservation_form.chalet).show_ui(ui, |ui| {
-                                for chalet in &self.preferences.chalet_names { ui.selectable_value(&mut self.reservation_form.chalet, chalet.clone(), chalet); }
+            egui::Window::new(if self.editing_reservation_id.is_some() {
+                "Editar reserva"
+            } else {
+                "Nova reserva"
+            })
+            .id(egui::Id::new("reservation-editor"))
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .fixed_pos(ctx.content_rect().center())
+            .pivot(Align2::CENTER_CENTER)
+            .fixed_size(Vec2::new(700.0, 820.0))
+            .show(ctx, |ui| {
+                ui.spacing_mut().item_spacing.y = 4.0;
+                ui.label(
+                    RichText::new("MARQUE UMA NOVA ESTADIA")
+                        .size(10.0)
+                        .strong()
+                        .color(ORANGE),
+                );
+                ui.label("Nome do responsável");
+                ui.text_edit_singleline(&mut self.reservation_form.responsible);
+                ui.horizontal(|ui| {
+                    ui.vertical(|ui| {
+                        ui.label("Chalé");
+                        egui::ComboBox::from_id_salt("reservation-form-chalet")
+                            .selected_text(&self.reservation_form.chalet)
+                            .show_ui(ui, |ui| {
+                                for chalet in &self.preferences.chalet_names {
+                                    ui.selectable_value(
+                                        &mut self.reservation_form.chalet,
+                                        chalet.clone(),
+                                        chalet,
+                                    );
+                                }
                             });
-                        });
-                        ui.vertical(|ui| {
-                            ui.label("Quantidade de pessoas");
-                            ui.add(egui::TextEdit::singleline(&mut self.reservation_form.guests).desired_width(100.0));
-                        });
                     });
-                    ui.horizontal(|ui| {
-                        reservation_date_wheel(ui, "Entrada", "check-in-date", &mut self.reservation_form.check_in);
-                        reservation_date_wheel(ui, "Saída", "check-out-date", &mut self.reservation_form.check_out);
-                    });
-                    ui.horizontal(|ui| {
-                        reservation_time_wheel(ui, "Horário de entrada", "check-in-time", &mut self.reservation_form.check_in_time);
-                        reservation_time_wheel(ui, "Horário de saída", "check-out-time", &mut self.reservation_form.check_out_time);
-                    });
-                    ui.label(RichText::new("A data de saída libera o chalé para uma nova entrada no mesmo dia.").size(10.0).color(MUTED));
-                    ui.horizontal(|ui| {
-                        reservation_toggle(ui, &mut self.reservation_form.pets, "Leva pets");
-                        reservation_toggle(ui, &mut self.reservation_form.breakfast, "Café da manhã");
-                    });
-                    ui.horizontal(|ui| {
-                        reservation_toggle(ui, &mut self.reservation_form.decoration, "Decoração");
-                        reservation_toggle(ui, &mut self.reservation_form.reserved, "Status reservado");
-                    });
-                    ui.label("Intolerâncias ou restrições do café");
-                    ui.text_edit_singleline(&mut self.reservation_form.restrictions);
-                    ui.label("Observações");
-                    ui.add(egui::TextEdit::multiline(&mut self.reservation_form.notes).desired_rows(3));
-                    ui.horizontal(|ui| {
-                        if ui.add(egui::Button::new("Anexar documentos").fill(SURFACE_ALT).stroke(Stroke::new(1.0, LINE)).corner_radius(8.0)).clicked() {
-                            if let Some(paths) = rfd::FileDialog::new().pick_files() {
-                                self.reservation_form.attachments.extend(paths.into_iter().map(|path| path.to_string_lossy().to_string()));
-                            }
-                        }
-                        ui.label(RichText::new(format!("{} arquivo(s)", self.reservation_form.attachments.len())).size(10.0).color(MUTED));
-                    });
-                    for path in &self.reservation_form.attachments {
-                        ui.label(RichText::new(file_name(path)).size(9.0).color(MUTED));
-                    }
-                    if let Some(error) = &self.notice { ui.label(RichText::new(error).size(10.0).color(RED)); }
-                    ui.horizontal(|ui| {
-                        if ui.add(egui::Button::new("Cancelar").fill(SURFACE_ALT).stroke(Stroke::new(1.0, LINE)).corner_radius(8.0)).clicked() { cancel = true; }
-                        if ui.add_enabled(!self.reservation_form.responsible.trim().is_empty(), egui::Button::new("Salvar e marcar no calendário").fill(Color32::from_rgb(153, 87, 38)).stroke(Stroke::new(1.0, LINE)).corner_radius(9.0)).clicked() { save = true; }
+                    ui.vertical(|ui| {
+                        ui.label("Quantidade de pessoas");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.reservation_form.guests)
+                                .desired_width(100.0),
+                        );
                     });
                 });
+                ui.horizontal(|ui| {
+                    reservation_date_wheel(
+                        ui,
+                        "Entrada",
+                        "check-in-date",
+                        &mut self.reservation_form.check_in,
+                    );
+                    reservation_date_wheel(
+                        ui,
+                        "Saída",
+                        "check-out-date",
+                        &mut self.reservation_form.check_out,
+                    );
+                });
+                ui.horizontal(|ui| {
+                    reservation_time_wheel(
+                        ui,
+                        "Horário de entrada",
+                        "check-in-time",
+                        &mut self.reservation_form.check_in_time,
+                    );
+                    reservation_time_wheel(
+                        ui,
+                        "Horário de saída",
+                        "check-out-time",
+                        &mut self.reservation_form.check_out_time,
+                    );
+                });
+                ui.label(
+                    RichText::new(
+                        "A data de saída libera o chalé para uma nova entrada no mesmo dia.",
+                    )
+                    .size(10.0)
+                    .color(MUTED),
+                );
+                egui::Grid::new("reservation-option-toggles")
+                    .num_columns(2)
+                    .spacing(Vec2::new(16.0, 6.0))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            reservation_toggle(
+                                ui,
+                                &mut self.reservation_form.pets,
+                                "Leva pets",
+                            );
+                        });
+                        ui.horizontal(|ui| {
+                            reservation_toggle(
+                                ui,
+                                &mut self.reservation_form.breakfast,
+                                "Café da manhã",
+                            );
+                        });
+                        ui.end_row();
+                        ui.horizontal(|ui| {
+                            reservation_toggle(
+                                ui,
+                                &mut self.reservation_form.decoration,
+                                "Decoração",
+                            );
+                        });
+                        ui.horizontal(|ui| {
+                            reservation_toggle(
+                                ui,
+                                &mut self.reservation_form.reserved,
+                                "Status reservado",
+                            );
+                        });
+                        ui.end_row();
+                    });
+                ui.label("Intolerâncias ou restrições do café");
+                ui.text_edit_singleline(&mut self.reservation_form.restrictions);
+                ui.label("Observações");
+                ui.add(egui::TextEdit::multiline(&mut self.reservation_form.notes).desired_rows(3));
+                ui.horizontal(|ui| {
+                    if ui
+                        .add(
+                            egui::Button::new("Anexar documentos")
+                                .fill(SURFACE_ALT)
+                                .stroke(Stroke::new(1.0, LINE))
+                                .corner_radius(8.0),
+                        )
+                        .clicked()
+                    {
+                        if let Some(paths) = rfd::FileDialog::new().pick_files() {
+                            self.reservation_form.attachments.extend(
+                                paths
+                                    .into_iter()
+                                    .map(|path| path.to_string_lossy().to_string()),
+                            );
+                        }
+                    }
+                    ui.label(
+                        RichText::new(format!(
+                            "{} arquivo(s)",
+                            self.reservation_form.attachments.len()
+                        ))
+                        .size(10.0)
+                        .color(MUTED),
+                    );
+                });
+                for path in &self.reservation_form.attachments {
+                    ui.label(RichText::new(file_name(path)).size(9.0).color(MUTED));
+                }
+                if let Some(error) = &self.notice {
+                    ui.label(RichText::new(error).size(10.0).color(RED));
+                }
+                ui.horizontal(|ui| {
+                    if ui
+                        .add(
+                            egui::Button::new("Cancelar")
+                                .fill(SURFACE_ALT)
+                                .stroke(Stroke::new(1.0, LINE))
+                                .corner_radius(8.0),
+                        )
+                        .clicked()
+                    {
+                        cancel = true;
+                    }
+                    if ui
+                        .add_enabled(
+                            !self.reservation_form.responsible.trim().is_empty(),
+                            egui::Button::new("Salvar e marcar no calendário")
+                                .fill(Color32::from_rgb(153, 87, 38))
+                                .stroke(Stroke::new(1.0, LINE))
+                                .corner_radius(9.0),
+                        )
+                        .clicked()
+                    {
+                        save = true;
+                    }
+                });
+            });
             self.reservation_form_open = open && !cancel;
             if save {
                 self.save_reservation_record();
@@ -2272,16 +2661,48 @@ impl DashboardApp {
                 )
                 .show(ctx, |ui| {
                     if let Some(item) = &reservation {
+                        // Keep the details dialog portrait-oriented; child widgets should not
+                        // expand the window past its compact reference width.
+                        ui.set_max_width(388.0);
                         ui.spacing_mut().item_spacing.y = 8.0;
                         ui.horizontal(|ui| {
                             ui.vertical(|ui| {
-                                ui.label(RichText::new("DETALHES DA RESERVA").size(9.0).strong().color(MUTED));
-                                ui.label(RichText::new(&item.responsible).size(18.0).strong().color(INK));
-                                ui.label(RichText::new(format!("{} · {} pessoas", item.chalet, item.guests)).size(10.0).color(MUTED));
+                                ui.label(
+                                    RichText::new("DETALHES DA RESERVA")
+                                        .size(9.0)
+                                        .strong()
+                                        .color(MUTED),
+                                );
+                                ui.label(
+                                    RichText::new(&item.responsible)
+                                        .size(18.0)
+                                        .strong()
+                                        .color(INK),
+                                );
+                                ui.label(
+                                    RichText::new(format!(
+                                        "{} · {} pessoas",
+                                        item.chalet, item.guests
+                                    ))
+                                    .size(10.0)
+                                    .color(MUTED),
+                                );
                             });
                             ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
-                                let close = ui.add_sized(Vec2::splat(30.0), egui::Button::new("").fill(SURFACE_ALT).stroke(Stroke::new(1.0, LINE)).corner_radius(8.0));
-                                icons::paint_in_rect(ui, &self.icons, Icon::X, Rect::from_center_size(close.rect.center(), Vec2::splat(14.0)), INK);
+                                let close = ui.add_sized(
+                                    Vec2::splat(30.0),
+                                    egui::Button::new("")
+                                        .fill(SURFACE_ALT)
+                                        .stroke(Stroke::new(1.0, LINE))
+                                        .corner_radius(8.0),
+                                );
+                                icons::paint_in_rect(
+                                    ui,
+                                    &self.icons,
+                                    Icon::X,
+                                    Rect::from_center_size(close.rect.center(), Vec2::splat(14.0)),
+                                    INK,
+                                );
                                 if close.clicked() {
                                     close_requested = true;
                                 }
@@ -2299,9 +2720,26 @@ impl DashboardApp {
                                     .inner_margin(Margin::same(9))
                                     .show(ui, |ui| {
                                         ui.set_min_width(164.0);
-                                        ui.label(RichText::new(if label == "Entrada" { "↘" } else { "↗" }).size(12.0).color(ORANGE));
+                                        ui.label(
+                                            RichText::new(if label == "Entrada" {
+                                                "↘"
+                                            } else {
+                                                "↗"
+                                            })
+                                            .size(12.0)
+                                            .color(ORANGE),
+                                        );
                                         ui.label(RichText::new(label).size(9.0).color(MUTED));
-                                        ui.label(RichText::new(format!("{} · {}", format_date_label(date), time)).size(10.0).strong().color(INK));
+                                        ui.label(
+                                            RichText::new(format!(
+                                                "{} · {}",
+                                                format_date_label(date),
+                                                time
+                                            ))
+                                            .size(10.0)
+                                            .strong()
+                                            .color(INK),
+                                        );
                                     });
                             }
                         });
@@ -2312,23 +2750,66 @@ impl DashboardApp {
                             .corner_radius(9.0)
                             .inner_margin(Margin::same(9))
                             .show(ui, |ui| {
-                                ui.label(RichText::new("Controle de estadia").size(9.0).strong().color(MUTED));
+                                ui.label(
+                                    RichText::new("Controle de estadia")
+                                        .size(9.0)
+                                        .strong()
+                                        .color(MUTED),
+                                );
                                 egui::ComboBox::from_id_salt("reservation-detail-status")
-                                    .selected_text(if status_reserved { "Reservado" } else { "Rascunho" })
+                                    .selected_text(if status_reserved {
+                                        "Reservado"
+                                    } else {
+                                        "Rascunho"
+                                    })
                                     .width(ui.available_width())
                                     .show_ui(ui, |ui| {
-                                        ui.selectable_value(&mut status_reserved, true, "Reservado");
-                                        ui.selectable_value(&mut status_reserved, false, "Rascunho");
+                                        ui.selectable_value(
+                                            &mut status_reserved,
+                                            true,
+                                            "Reservado",
+                                        );
+                                        ui.selectable_value(
+                                            &mut status_reserved,
+                                            false,
+                                            "Rascunho",
+                                        );
                                     });
                             });
 
+                        let chip_width =
+                            (ui.available_width() - ui.spacing().item_spacing.x) / 2.0;
                         ui.horizontal(|ui| {
-                            reservation_detail_chip(ui, &format!("{} hóspedes", item.guests));
-                            reservation_detail_chip(ui, if item.pets { "Com pets" } else { "Sem pets" });
+                            reservation_detail_chip(
+                                ui,
+                                &format!("{} hóspedes", item.guests),
+                                chip_width,
+                            );
+                            reservation_detail_chip(
+                                ui,
+                                if item.pets { "Com pets" } else { "Sem pets" },
+                                chip_width,
+                            );
                         });
                         ui.horizontal(|ui| {
-                            reservation_detail_chip(ui, if item.breakfast { "Café incluído" } else { "Sem café" });
-                            reservation_detail_chip(ui, if item.decoration { "Com decoração" } else { "Sem decoração" });
+                            reservation_detail_chip(
+                                ui,
+                                if item.breakfast {
+                                    "Café incluído"
+                                } else {
+                                    "Sem café"
+                                },
+                                chip_width,
+                            );
+                            reservation_detail_chip(
+                                ui,
+                                if item.decoration {
+                                    "Com decoração"
+                                } else {
+                                    "Sem decoração"
+                                },
+                                chip_width,
+                            );
                         });
 
                         Frame::new()
@@ -2336,58 +2817,136 @@ impl DashboardApp {
                             .corner_radius(9.0)
                             .inner_margin(Margin::same(9))
                             .show(ui, |ui| {
-                                ui.label(RichText::new("RESTRIÇÕES E OBSERVAÇÕES").size(9.0).strong().color(MUTED));
+                                ui.label(
+                                    RichText::new("RESTRIÇÕES E OBSERVAÇÕES")
+                                        .size(9.0)
+                                        .strong()
+                                        .color(MUTED),
+                                );
                                 let details = [
-                                    (!item.restrictions.trim().is_empty()).then_some(item.restrictions.as_str()),
+                                    (!item.restrictions.trim().is_empty())
+                                        .then_some(item.restrictions.as_str()),
                                     (!item.notes.trim().is_empty()).then_some(item.notes.as_str()),
-                                ].into_iter().flatten().collect::<Vec<_>>().join(" · ");
-                                ui.label(RichText::new(if details.is_empty() { "Sem observações informadas" } else { &details }).size(10.0).color(INK));
+                                ]
+                                .into_iter()
+                                .flatten()
+                                .collect::<Vec<_>>()
+                                .join(" · ");
+                                ui.label(
+                                    RichText::new(if details.is_empty() {
+                                        "Sem observações informadas"
+                                    } else {
+                                        &details
+                                    })
+                                    .size(10.0)
+                                    .color(INK),
+                                );
                             });
 
-                        ui.label(RichText::new("DOCUMENTOS ANEXADOS").size(9.0).strong().color(MUTED));
+                        ui.label(
+                            RichText::new("DOCUMENTOS ANEXADOS")
+                                .size(9.0)
+                                .strong()
+                                .color(MUTED),
+                        );
                         if item.attachments.is_empty() {
                             Frame::new()
                                 .fill(SURFACE_ALT)
                                 .stroke(Stroke::new(1.0, LINE))
                                 .corner_radius(9.0)
                                 .inner_margin(Margin::same(10))
-                                .show(ui, |ui| { ui.label(RichText::new("Nenhum documento anexado").size(10.0).color(MUTED)); });
+                                .show(ui, |ui| {
+                                    ui.label(
+                                        RichText::new("Nenhum documento anexado")
+                                            .size(10.0)
+                                            .color(MUTED),
+                                    );
+                                });
                         } else {
-                            egui::ScrollArea::vertical().max_height(218.0).show(ui, |ui| {
-                                for (index, path) in item.attachments.iter().enumerate() {
-                                    Frame::new()
-                                        .fill(SURFACE_ALT)
-                                        .stroke(Stroke::new(1.0, LINE))
-                                        .corner_radius(9.0)
-                                        .inner_margin(Margin::symmetric(9, 7))
-                                        .show(ui, |ui| {
-                                            ui.set_min_width(ui.available_width());
-                                            ui.horizontal(|ui| {
-                                                ui.label(RichText::new("▤").size(15.0).color(ORANGE));
-                                                ui.vertical(|ui| {
-                                                    ui.add_sized(Vec2::new(284.0, 15.0), egui::Label::new(RichText::new(file_name(path)).size(10.0).strong().color(INK)).truncate());
-                                                    ui.label(RichText::new(attachment_metadata(path)).size(8.0).color(MUTED));
+                            egui::ScrollArea::vertical()
+                                .max_height(218.0)
+                                .show(ui, |ui| {
+                                    for (index, path) in item.attachments.iter().enumerate() {
+                                        Frame::new()
+                                            .fill(SURFACE_ALT)
+                                            .stroke(Stroke::new(1.0, LINE))
+                                            .corner_radius(9.0)
+                                            .inner_margin(Margin::symmetric(9, 7))
+                                            .show(ui, |ui| {
+                                                ui.set_min_width(ui.available_width());
+                                                ui.horizontal(|ui| {
+                                                    ui.label(
+                                                        RichText::new("▤").size(15.0).color(ORANGE),
+                                                    );
+                                                    ui.vertical(|ui| {
+                                                        ui.add_sized(
+                                                            Vec2::new(284.0, 15.0),
+                                                            egui::Label::new(
+                                                                RichText::new(file_name(path))
+                                                                    .size(10.0)
+                                                                    .strong()
+                                                                    .color(INK),
+                                                            )
+                                                            .truncate(),
+                                                        );
+                                                        ui.label(
+                                                            RichText::new(attachment_metadata(
+                                                                path,
+                                                            ))
+                                                            .size(8.0)
+                                                            .color(MUTED),
+                                                        );
+                                                    });
+                                                    let download = ui.add_sized(
+                                                        Vec2::splat(28.0),
+                                                        egui::Button::new("↓")
+                                                            .fill(ORANGE_PALE)
+                                                            .stroke(Stroke::NONE)
+                                                            .corner_radius(7.0),
+                                                    );
+                                                    if download
+                                                        .on_hover_text("Abrir documento")
+                                                        .clicked()
+                                                    {
+                                                        let _ = open::that(path);
+                                                    }
                                                 });
-                                                let download = ui.add_sized(Vec2::splat(28.0), egui::Button::new("↓").fill(ORANGE_PALE).stroke(Stroke::NONE).corner_radius(7.0));
-                                                if download.on_hover_text("Abrir documento").clicked() {
-                                                    let _ = open::that(path);
-                                                }
                                             });
-                                        });
-                                    if index + 1 < item.attachments.len() { ui.add_space(5.0); }
-                                }
-                            });
+                                        if index + 1 < item.attachments.len() {
+                                            ui.add_space(5.0);
+                                        }
+                                    }
+                                });
                         }
 
                         ui.horizontal(|ui| {
                             let edit_button = ui.add_sized(
                                 Vec2::new(ui.available_width() - 38.0, 34.0),
-                                egui::Button::new(RichText::new("   Editar reserva").size(11.0).strong().color(INK))
-                                    .fill(GREEN)
-                                    .corner_radius(9.0),
+                                egui::Button::new(
+                                    RichText::new("   Editar reserva")
+                                        .size(11.0)
+                                        .strong()
+                                        .color(INK),
+                                )
+                                .fill(GREEN)
+                                .corner_radius(9.0),
                             );
-                            icons::paint_in_rect(ui, &self.icons, Icon::Pencil, Rect::from_center_size(Pos2::new(edit_button.rect.left() + 17.0, edit_button.rect.center().y), Vec2::splat(14.0)), INK);
-                            if edit_button.clicked() { edit = true; }
+                            icons::paint_in_rect(
+                                ui,
+                                &self.icons,
+                                Icon::Pencil,
+                                Rect::from_center_size(
+                                    Pos2::new(
+                                        edit_button.rect.left() + 17.0,
+                                        edit_button.rect.center().y,
+                                    ),
+                                    Vec2::splat(14.0),
+                                ),
+                                INK,
+                            );
+                            if edit_button.clicked() {
+                                edit = true;
+                            }
                             let delete_button = ui.add_sized(
                                 Vec2::splat(34.0),
                                 egui::Button::new("")
@@ -2395,8 +2954,19 @@ impl DashboardApp {
                                     .stroke(Stroke::new(1.0, RED))
                                     .corner_radius(9.0),
                             );
-                            icons::paint_in_rect(ui, &self.icons, Icon::Trash, Rect::from_center_size(delete_button.rect.center(), Vec2::splat(15.0)), RED);
-                            if delete_button.on_hover_text("Excluir reserva").clicked() { delete = true; }
+                            icons::paint_in_rect(
+                                ui,
+                                &self.icons,
+                                Icon::Trash,
+                                Rect::from_center_size(
+                                    delete_button.rect.center(),
+                                    Vec2::splat(15.0),
+                                ),
+                                RED,
+                            );
+                            if delete_button.on_hover_text("Excluir reserva").clicked() {
+                                delete = true;
+                            }
                         });
                     }
                 });
@@ -2405,7 +2975,12 @@ impl DashboardApp {
             }
             if let Some(item) = reservation.as_ref() {
                 if status_reserved != item.reserved {
-                    if let Some(saved) = self.business_data.reservations.iter_mut().find(|saved| saved.id == item.id) {
+                    if let Some(saved) = self
+                        .business_data
+                        .reservations
+                        .iter_mut()
+                        .find(|saved| saved.id == item.id)
+                    {
                         saved.reserved = status_reserved;
                     }
                     self.persist_business_data();
@@ -2511,7 +3086,7 @@ impl DashboardApp {
         color: Color32,
         width: f32,
     ) {
-        let (rect, _) = ui.allocate_exact_size(Vec2::new(width, 76.0), Sense::hover());
+        let (rect, _) = ui.allocate_exact_size(Vec2::new(width, 62.0), Sense::hover());
         let painter = ui.painter();
         painter.rect_filled(rect, 8.0, Color32::from_rgb(40, 25, 16));
         painter.rect_stroke(
@@ -2521,24 +3096,24 @@ impl DashboardApp {
             egui::StrokeKind::Inside,
         );
         painter.text(
-            rect.left_top() + Vec2::new(12.0, 10.0),
+            rect.left_top() + Vec2::new(10.0, 8.0),
             Align2::LEFT_TOP,
             label,
-            FontId::proportional(10.0),
+            FontId::proportional(9.0),
             Color32::from_rgb(190, 160, 126),
         );
         painter.text(
-            rect.left_top() + Vec2::new(12.0, 30.0),
+            rect.left_top() + Vec2::new(10.0, 25.0),
             Align2::LEFT_TOP,
             value,
-            FontId::proportional(20.0),
+            FontId::proportional(17.0),
             color,
         );
         painter.text(
-            Pos2::new(rect.left() + 12.0, rect.bottom() - 9.0),
+            Pos2::new(rect.left() + 10.0, rect.bottom() - 7.0),
             Align2::LEFT_BOTTOM,
             caption,
-            FontId::proportional(9.0),
+            FontId::proportional(8.0),
             Color32::from_rgb(160, 128, 98),
         );
     }
@@ -4369,6 +4944,33 @@ impl eframe::App for DashboardApp {
         self.last_context = ctx.clone();
         self.advance_profile_animation(&ctx);
         self.handle_events(&ctx);
+        if Instant::now() >= self.next_update_check {
+            self.next_update_check = Instant::now() + Duration::from_secs(300);
+            self.request_update_check(ctx.clone());
+        }
+        self.tick_scheduled_update(&ctx);
+        if let Some(started_at) = self.splash_started_at {
+            let elapsed = started_at.elapsed();
+            let total_duration: Duration = self.splash_frames.iter().map(|frame| frame.delay).sum();
+            if elapsed < total_duration {
+                let mut frame_start = Duration::ZERO;
+                let frame_index = self
+                    .splash_frames
+                    .iter()
+                    .position(|frame| {
+                        frame_start += frame.delay;
+                        elapsed < frame_start
+                    })
+                    .unwrap_or_else(|| self.splash_frames.len().saturating_sub(1));
+                self.show_startup_splash(root, frame_index);
+                if let Some(frame) = self.splash_frames.get(frame_index) {
+                    ctx.request_repaint_after(frame.delay.min(total_duration - elapsed));
+                }
+                return;
+            }
+            self.splash_started_at = None;
+            self.splash_frames.clear();
+        }
         let reservation_modal_open =
             self.reservation_form_open || self.reservation_details_id.is_some();
         if reservation_modal_open && self.modal_backdrop_texture.is_none() {
@@ -4396,6 +4998,8 @@ impl eframe::App for DashboardApp {
                 Color32::from_rgba_unmultiplied(25, 16, 11, 92),
             );
             self.reservation_windows(&ctx);
+            self.show_update_notice(&ctx);
+            self.show_update_prompt(&ctx);
             if !self.reservation_form_open && self.reservation_details_id.is_none() {
                 self.pending_modal_backdrop = None;
                 self.modal_backdrop_texture = None;
@@ -4405,6 +5009,8 @@ impl eframe::App for DashboardApp {
         self.title_bar(root);
         if self.section == Section::Launcher {
             self.show_launcher(root);
+            self.show_update_notice(&ctx);
+            self.show_update_prompt(&ctx);
             return;
         }
         egui::CentralPanel::default()
@@ -4420,7 +5026,64 @@ impl eframe::App for DashboardApp {
                 Section::Adega => self.show_adega(ui, &ctx),
                 Section::Configuracoes => self.show_settings(ui, &ctx),
             });
+        self.show_update_notice(&ctx);
+        self.show_update_prompt(&ctx);
     }
+}
+
+fn load_splash_animation(ctx: &egui::Context) -> Vec<ProfileFrame> {
+    let bytes = include_bytes!("../assets/splash-matto-chales.gif");
+    image::codecs::gif::GifDecoder::new(Cursor::new(bytes.as_slice()))
+        .ok()
+        .and_then(|decoder| image::AnimationDecoder::into_frames(decoder).collect_frames().ok())
+        .unwrap_or_default()
+        .into_iter()
+        .take(120)
+        .enumerate()
+        .map(|(index, frame)| {
+            let (numerator, denominator) = frame.delay().numer_denom_ms();
+            let delay_ms = if denominator == 0 {
+                42
+            } else {
+                (numerator / denominator).max(30)
+            };
+            let image = frame.into_buffer();
+            let size = [image.width() as usize, image.height() as usize];
+            ProfileFrame {
+                texture: ctx.load_texture(
+                    format!("matto-startup-splash-{index}"),
+                    egui::ColorImage::from_rgba_unmultiplied(size, image.as_raw()),
+                    egui::TextureOptions::LINEAR,
+                ),
+                delay: Duration::from_millis(u64::from(delay_ms)),
+            }
+        })
+        .collect()
+}
+
+impl DashboardApp {
+    fn show_startup_splash(&self, root: &mut egui::Ui, frame_index: usize) {
+        let bounds = root.max_rect();
+        root.painter()
+            .rect_filled(bounds, 0.0, Color32::from_rgb(8, 17, 13));
+        let Some(frame) = self.splash_frames.get(frame_index) else {
+            return;
+        };
+        let texture_size = frame.texture.size_vec2();
+        let scale = (bounds.width() / texture_size.x).min(bounds.height() / texture_size.y);
+        let image_size = texture_size * scale;
+        let image_rect = Rect::from_center_size(bounds.center(), image_size);
+        root.put(
+            image_rect,
+            egui::Image::new((frame.texture.id(), image_size))
+                .fit_to_exact_size(image_size),
+        );
+    }
+}
+
+fn format_countdown(duration: Duration) -> String {
+    let total_seconds = duration.as_secs();
+    format!("{:02}:{:02}", total_seconds / 60, total_seconds % 60)
 }
 
 #[cfg(windows)]
@@ -5236,7 +5899,9 @@ fn attachment_metadata(path: &str) -> String {
         "zip" => "application/zip".to_owned(),
         _ => extension,
     };
-    let size = fs::metadata(path).map(|metadata| metadata.len()).unwrap_or(0);
+    let size = fs::metadata(path)
+        .map(|metadata| metadata.len())
+        .unwrap_or(0);
     let size_label = if size >= 1024 * 1024 {
         format!("{:.1} MB", size as f64 / (1024.0 * 1024.0))
     } else {
@@ -5245,13 +5910,13 @@ fn attachment_metadata(path: &str) -> String {
     format!("{kind} · {size_label}")
 }
 
-fn reservation_detail_chip(ui: &mut egui::Ui, label: &str) {
+fn reservation_detail_chip(ui: &mut egui::Ui, label: &str, width: f32) {
     Frame::new()
         .fill(SURFACE_ALT)
         .corner_radius(7.0)
         .inner_margin(Margin::symmetric(8, 6))
         .show(ui, |ui| {
-            ui.set_min_width((ui.available_width() - 4.0).max(160.0));
+            ui.set_width((width - 16.0).max(120.0));
             ui.label(RichText::new(label).size(9.0).strong().color(INK));
         });
 }

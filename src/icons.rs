@@ -34,6 +34,7 @@ pub enum Icon {
     SettingsMenu,
     Maximize,
     X,
+    OctagonExclamationPoint,
 }
 
 pub fn load(ctx: &egui::Context) -> HashMap<Icon, TextureHandle> {
@@ -119,6 +120,10 @@ pub fn load(ctx: &egui::Context) -> HashMap<Icon, TextureHandle> {
             include_str!("../assets/lucide/maximize.svg"),
         ),
         (Icon::X, include_str!("../assets/lucide/x.svg")),
+        (
+            Icon::OctagonExclamationPoint,
+            include_str!("../assets/lucide/octagon-exclamation-point.svg"),
+        ),
     ]
     .into_iter()
     .filter_map(|(icon, svg)| rasterize(ctx, icon, svg).map(|texture| (icon, texture)))
