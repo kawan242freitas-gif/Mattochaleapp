@@ -253,6 +253,8 @@ pub struct DashboardApp {
     chalet_filter_backdrop_texture: Option<TextureHandle>,
     profile_menu_backdrop_texture: Option<TextureHandle>,
     reservation_status_backdrop_texture: Option<TextureHandle>,
+    movement_method_backdrop_texture: Option<TextureHandle>,
+    movement_category_backdrop_texture: Option<TextureHandle>,
     reservation_form: ReservationForm,
     editing_reservation_id: Option<String>,
     reservation_details_id: Option<String>,
@@ -266,6 +268,9 @@ pub struct DashboardApp {
     products_loading: bool,
     product_error: Option<String>,
     product_query: String,
+    adega_category_filter: CategoryFilter,
+    adega_stock_filter: String,
+    adega_sort: String,
     selected_product: Option<String>,
     product_images: HashMap<String, TextureHandle>,
     image_requests: HashSet<String>,
@@ -392,6 +397,8 @@ impl DashboardApp {
             chalet_filter_backdrop_texture: None,
             profile_menu_backdrop_texture: None,
             reservation_status_backdrop_texture: None,
+            movement_method_backdrop_texture: None,
+            movement_category_backdrop_texture: None,
             reservation_form: ReservationForm::default(),
             editing_reservation_id: None,
             reservation_details_id: None,
@@ -405,6 +412,9 @@ impl DashboardApp {
             products_loading: true,
             product_error: None,
             product_query: String::new(),
+            adega_category_filter: CategoryFilter::Todos,
+            adega_stock_filter: "Todos".to_owned(),
+            adega_sort: "Nome".to_owned(),
             selected_product: None,
             product_images: HashMap::new(),
             image_requests: HashSet::new(),
@@ -938,7 +948,17 @@ impl DashboardApp {
                     });
 
                     if !self.profile_name.trim().is_empty() {
-                        let name_width = self.profile_name.chars().count() as f32 * 7.3;
+                        let name_font = FontId::proportional(13.0);
+                        let name_width = ui.fonts_mut(|fonts| {
+                            fonts
+                                .layout_no_wrap(
+                                    self.profile_name.clone(),
+                                    name_font.clone(),
+                                    INK,
+                                )
+                                .size()
+                                .x
+                        });
                         let profile_width = (name_width + 84.0).clamp(120.0, 260.0);
                         let capsule = Rect::from_center_size(
                             Pos2::new(rect.center().x, rect.center().y),
@@ -982,11 +1002,11 @@ impl DashboardApp {
                             Pos2::new(name_left, capsule.center().y),
                             Align2::LEFT_CENTER,
                             &self.profile_name,
-                            FontId::proportional(13.0),
+                            name_font,
                             INK,
                         );
                         let chevron_rect = Rect::from_center_size(
-                            Pos2::new(name_left + name_width + 10.0, capsule.center().y),
+                            Pos2::new(name_left + name_width + 14.0, capsule.center().y),
                             Vec2::splat(16.0),
                         );
                         let update_pending = self.update_available.is_some();
@@ -2020,7 +2040,7 @@ impl DashboardApp {
                         ui.set_width(calendar_width);
                         ui.spacing_mut().item_spacing.y = 0.0;
                         self.calendar_panel(ui, calendar_cell_height);
-                        ui.add_space(3.0);
+                        ui.add_space(24.0);
                         let card_gap = 5.0;
                         let card_width = ((calendar_width - card_gap * 3.0) / 4.0).max(80.0);
                         ui.allocate_ui_with_layout(
@@ -2506,9 +2526,9 @@ impl DashboardApp {
             .resizable(false)
             .fixed_pos(ctx.content_rect().center())
             .pivot(Align2::CENTER_CENTER)
-            .fixed_size(Vec2::new(700.0, 820.0))
+            .fixed_size(Vec2::new(700.0, 900.0))
             .show(ctx, |ui| {
-                ui.spacing_mut().item_spacing.y = 4.0;
+                ui.spacing_mut().item_spacing = Vec2::new(12.0, 9.0);
                 ui.label(
                     RichText::new("MARQUE UMA NOVA ESTADIA")
                         .size(10.0)
@@ -2520,17 +2540,24 @@ impl DashboardApp {
                 ui.horizontal(|ui| {
                     ui.vertical(|ui| {
                         ui.label("Chalé");
-                        egui::ComboBox::from_id_salt("reservation-form-chalet")
-                            .selected_text(&self.reservation_form.chalet)
-                            .show_ui(ui, |ui| {
-                                for chalet in &self.preferences.chalet_names {
-                                    ui.selectable_value(
-                                        &mut self.reservation_form.chalet,
-                                        chalet.clone(),
-                                        chalet,
-                                    );
-                                }
-                            });
+                        ui.scope(|ui| {
+                            let mut style = (**ui.style()).clone();
+                            style.visuals.widgets.inactive.bg_fill = SURFACE;
+                            style.visuals.widgets.hovered.bg_fill = SURFACE_ALT;
+                            style.visuals.widgets.active.bg_fill = ORANGE_PALE;
+                            ui.set_style(style);
+                            egui::ComboBox::from_id_salt("reservation-form-chalet")
+                                .selected_text(&self.reservation_form.chalet)
+                                .show_ui(ui, |ui| {
+                                    for chalet in &self.preferences.chalet_names {
+                                        ui.selectable_value(
+                                            &mut self.reservation_form.chalet,
+                                            chalet.clone(),
+                                            chalet,
+                                        );
+                                    }
+                                });
+                        });
                     });
                     ui.vertical(|ui| {
                         ui.label("Quantidade de pessoas");
@@ -2577,7 +2604,7 @@ impl DashboardApp {
                 );
                 egui::Grid::new("reservation-option-toggles")
                     .num_columns(2)
-                    .spacing(Vec2::new(16.0, 6.0))
+                    .spacing(Vec2::new(20.0, 10.0))
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
                             reservation_toggle(
@@ -3443,6 +3470,8 @@ impl DashboardApp {
             category: "Hospedagem".to_owned(),
             ..MovementForm::default()
         };
+        self.pending_modal_backdrop = capture_blurred_backdrop();
+        self.modal_backdrop_texture = None;
         self.movement_form_open = true;
         self.notice = None;
     }
@@ -3455,6 +3484,8 @@ impl DashboardApp {
             installments: "1/1".to_owned(),
             ..PayableForm::default()
         };
+        self.pending_modal_backdrop = capture_blurred_backdrop();
+        self.modal_backdrop_texture = None;
         self.payable_form_open = true;
         self.notice = None;
     }
@@ -3469,8 +3500,20 @@ impl DashboardApp {
                 .open(&mut open)
                 .collapsible(false)
                 .resizable(false)
+                .fixed_pos(ctx.content_rect().center())
+                .pivot(Align2::CENTER_CENTER)
                 .default_width(470.0)
                 .show(ctx, |ui| {
+                    let visuals = &mut ui.style_mut().visuals;
+                    visuals.widgets.inactive.bg_fill = SURFACE;
+                    visuals.widgets.inactive.bg_stroke = Stroke::new(1.0, LINE);
+                    visuals.widgets.hovered.bg_fill = SURFACE_ALT;
+                    visuals.widgets.hovered.bg_stroke = Stroke::new(1.0, ORANGE);
+                    visuals.widgets.active.bg_fill = ORANGE_PALE;
+                    visuals.widgets.active.bg_stroke = Stroke::new(1.0, ORANGE);
+                    visuals.widgets.open.bg_fill = ORANGE_PALE;
+                    visuals.widgets.open.bg_stroke = Stroke::new(1.0, ORANGE);
+                    visuals.selection.bg_fill = ORANGE_PALE;
                     ui.horizontal(|ui| {
                         for kind in ["Entrada", "Saída"] {
                             if ui
@@ -3492,41 +3535,38 @@ impl DashboardApp {
                             ui.label("Valor");
                             ui.text_edit_singleline(&mut self.movement_form.amount);
                         });
-                        ui.vertical(|ui| {
-                            ui.label("Data · AAAA-MM-DD");
-                            ui.text_edit_singleline(&mut self.movement_form.date);
-                        });
+                        reservation_date_wheel(
+                            ui,
+                            "Data",
+                            "movement-date",
+                            &mut self.movement_form.date,
+                        );
                     });
                     ui.horizontal(|ui| {
                         ui.vertical(|ui| {
                             ui.label("Forma / conta");
-                            egui::ComboBox::from_id_salt("movement-method")
-                                .selected_text(&self.movement_form.payment_method)
-                                .show_ui(ui, |ui| {
-                                    for &method in
-                                        payment_methods().iter().filter(|m| **m != "Todas")
-                                    {
-                                        ui.selectable_value(
-                                            &mut self.movement_form.payment_method,
-                                            method.to_owned(),
-                                            method,
-                                        );
-                                    }
-                                });
+                            finance_glass_dropdown(
+                                ui,
+                                "movement-method",
+                                &mut self.movement_form.payment_method,
+                                payment_methods()
+                                    .iter()
+                                    .copied()
+                                    .filter(|method| *method != "Todas"),
+                                148.0,
+                                &mut self.movement_method_backdrop_texture,
+                            );
                         });
                         ui.vertical(|ui| {
                             ui.label("Categoria");
-                            egui::ComboBox::from_id_salt("movement-category")
-                                .selected_text(&self.movement_form.category)
-                                .show_ui(ui, |ui| {
-                                    for category in movement_categories() {
-                                        ui.selectable_value(
-                                            &mut self.movement_form.category,
-                                            category.to_string(),
-                                            *category,
-                                        );
-                                    }
-                                });
+                            finance_glass_dropdown(
+                                ui,
+                                "movement-category",
+                                &mut self.movement_form.category,
+                                movement_categories().iter().copied(),
+                                164.0,
+                                &mut self.movement_category_backdrop_texture,
+                            );
                         });
                     });
                     ui.label("Observações");
@@ -3749,8 +3789,8 @@ impl DashboardApp {
                         Layout::top_down(Align::Min),
                         |ui| {
                             Frame::new()
-                                .fill(Color32::from_rgba_unmultiplied(250, 249, 244, 224))
-                                .stroke(Stroke::new(1.0, Color32::WHITE))
+                                .fill(SURFACE)
+                                .stroke(Stroke::new(1.0, LINE))
                                 .corner_radius(18)
                                 .inner_margin(Margin::symmetric(12, 12))
                                 .show(ui, |ui| {
@@ -3805,8 +3845,8 @@ impl DashboardApp {
                         Layout::top_down(Align::Min),
                         |ui| {
                             Frame::new()
-                                .fill(Color32::from_rgba_unmultiplied(250, 249, 244, 232))
-                                .stroke(Stroke::new(1.0, Color32::WHITE))
+                                .fill(SURFACE)
+                                .stroke(Stroke::new(1.0, LINE))
                                 .corner_radius(18)
                                 .inner_margin(Margin::symmetric(22, 18))
                                 .show(ui, |ui| {
@@ -3844,9 +3884,9 @@ impl DashboardApp {
                 rect,
                 12.0,
                 if selected {
-                    Color32::from_rgba_unmultiplied(217, 229, 208, 215)
+                    ORANGE_PALE
                 } else {
-                    Color32::from_rgba_unmultiplied(232, 231, 222, 155)
+                    Color32::from_rgba_unmultiplied(77, 49, 29, 150)
                 },
             );
         }
@@ -4735,153 +4775,381 @@ impl DashboardApp {
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                ui.add_space(22.0);
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new("Adega").size(34.0).strong().color(INK));
-                    ui.add_space(20.0);
-                    Frame::new()
-                        .fill(SURFACE)
-                        .stroke(Stroke::new(1.0, Color32::WHITE))
-                        .corner_radius(20)
-                        .inner_margin(Margin::symmetric(13, 5))
-                        .show(ui, |ui| {
-                            ui.horizontal_centered(|ui| {
-                                icons::image(ui, &self.icons, Icon::Search, 18.0, MUTED);
-                                ui.add_sized(
-                                    Vec2::new(245.0, 27.0),
-                                    egui::TextEdit::singleline(&mut self.product_query)
-                                        .hint_text("Buscar rótulo"),
-                                );
-                            });
-                        });
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if self.text_button(ui, Icon::Refresh, "Atualizar", 120.0, 38.0) {
-                            self.products_loading = true;
-                            self.request_products(ctx.clone());
-                        }
-                        ui.add_space(12.0);
-                        ui.label(
-                            RichText::new(format!("{} produtos", self.products.len()))
-                                .size(13.0)
-                                .color(MUTED),
-                        );
-                    });
-                });
-                ui.add_space(20.0);
-
-                if self.products_loading {
-                    ui.horizontal(|ui| {
-                        ui.spinner();
-                        ui.label(RichText::new("Carregando produtos...").color(MUTED));
-                    });
-                    return;
-                }
-                if let Some(error) = &self.product_error {
-                    ui.label(RichText::new(error).color(RED));
-                    return;
-                }
-
-                let query = self.product_query.to_lowercase();
-                let products: Vec<Product> = self
-                    .products
-                    .iter()
-                    .filter(|product| {
-                        query.is_empty()
-                            || product.name.to_lowercase().contains(&query)
-                            || product.label.to_lowercase().contains(&query)
-                    })
-                    .cloned()
-                    .collect();
-
+                ui.add_space(14.0);
                 Frame::new()
                     .fill(SURFACE)
-                    .stroke(Stroke::new(1.0, Color32::WHITE))
+                    .stroke(Stroke::new(1.0, LINE))
                     .corner_radius(18)
-                    .inner_margin(Margin::symmetric(20, 14))
+                    .inner_margin(Margin::symmetric(22, 18))
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
-                            ui.add_sized(
-                                Vec2::new(72.0, 26.0),
-                                egui::Label::new(RichText::new("Rótulo").strong().color(MUTED)),
-                            );
-                            ui.add_sized(
-                                Vec2::new(440.0, 26.0),
-                                egui::Label::new(RichText::new("Produto").strong().color(MUTED)),
-                            );
-                            ui.add_sized(
-                                Vec2::new(190.0, 26.0),
-                                egui::Label::new(RichText::new("Estoque").strong().color(MUTED)),
-                            );
-                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                ui.add_sized(
-                                    Vec2::new(150.0, 26.0),
-                                    egui::Label::new(RichText::new("Preço").strong().color(MUTED)),
-                                );
-                            });
-                        });
-                        ui.separator();
-                        for product in products {
-                            self.product_row(ui, &product);
-                            ui.separator();
-                        }
-                        if self.products.is_empty() {
-                            ui.add_space(25.0);
-                            ui.vertical_centered(|ui| {
-                                icons::image(ui, &self.icons, Icon::Wine, 34.0, GREEN_MID);
+                            ui.vertical(|ui| {
                                 ui.label(
-                                    RichText::new("Nenhum produto cadastrado")
-                                        .size(16.0)
+                                    RichText::new("ADEGA · ESTOQUE E CATÁLOGO")
+                                        .size(10.0)
+                                        .strong()
+                                        .color(ORANGE),
+                                );
+                                ui.label(
+                                    RichText::new("Sua adega, sob controle")
+                                        .size(30.0)
                                         .strong()
                                         .color(INK),
                                 );
                                 ui.label(
-                                    RichText::new("Os itens da adega aparecerão aqui.")
-                                        .size(13.0)
-                                        .color(MUTED),
+                                    RichText::new(
+                                        "Acompanhe rótulos, preços e disponibilidade em um só lugar.",
+                                    )
+                                    .size(12.0)
+                                    .color(MUTED),
                                 );
                             });
-                            ui.add_space(25.0);
-                        }
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                if ui
+                                    .add_sized(
+                                        Vec2::new(166.0, 40.0),
+                                        egui::Button::new(
+                                            RichText::new("Gerenciar catálogo")
+                                                .strong()
+                                                .color(INK),
+                                        )
+                                        .fill(SURFACE_ALT)
+                                        .stroke(Stroke::new(1.0, LINE))
+                                        .corner_radius(10.0),
+                                    )
+                                    .clicked()
+                                {
+                                    self.settings_page = SettingsPage::Catalogo;
+                                    self.settings_notice = None;
+                                    self.section = Section::Configuracoes;
+                                }
+                                ui.add_space(8.0);
+                                if self.text_button(ui, Icon::Refresh, "Sincronizar", 128.0, 40.0) {
+                                    self.products_loading = true;
+                                    self.product_error = None;
+                                    self.request_products(ctx.clone());
+                                }
+                            });
+                        });
                     });
 
-                if let Some(selected_id) = &self.selected_product {
-                    if let Some(product) = self.products.iter().find(|item| &item.id == selected_id)
-                    {
-                        ui.add_space(12.0);
-                        Frame::new()
-                            .fill(SURFACE_ALT)
-                            .corner_radius(14)
-                            .inner_margin(Margin::symmetric(18, 12))
-                            .show(ui, |ui| {
-                                ui.label(
-                                    RichText::new(&product.label).size(15.0).strong().color(INK),
-                                );
-                                ui.label(RichText::new(&product.description).color(MUTED));
+                ui.add_space(12.0);
+                let product_count = self.products.len();
+                let tracked_units: u32 = self
+                    .products
+                    .iter()
+                    .filter(|product| product.stock_quantity.is_some())
+                    .map(|product| product.stock_quantity.unwrap_or_default())
+                    .sum();
+                let low_stock_count = self
+                    .products
+                    .iter()
+                    .filter(|product| {
+                        product
+                            .stock_quantity
+                            .is_some_and(|stock| stock > 0 && stock <= self.preferences.low_stock_threshold)
+                    })
+                    .count();
+                let out_of_stock_count = self
+                    .products
+                    .iter()
+                    .filter(|product| product.stock_quantity == Some(0))
+                    .count();
+                ui.columns(4, |columns| {
+                    adega_metric(
+                        &mut columns[0],
+                        "RÓTULOS NO CATÁLOGO",
+                        product_count.to_string(),
+                        "itens publicados",
+                        ORANGE,
+                    );
+                    adega_metric(
+                        &mut columns[1],
+                        "UNIDADES CONTROLADAS",
+                        tracked_units.to_string(),
+                        "garrafas registradas",
+                        INK,
+                    );
+                    adega_metric(
+                        &mut columns[2],
+                        "ESTOQUE BAIXO",
+                        low_stock_count.to_string(),
+                        format!("até {} unidades", self.preferences.low_stock_threshold),
+                        Color32::from_rgb(229, 174, 107),
+                    );
+                    adega_metric(
+                        &mut columns[3],
+                        "ESGOTADOS",
+                        out_of_stock_count.to_string(),
+                        "precisam de reposição",
+                        RED,
+                    );
+                });
+
+                ui.add_space(12.0);
+                Frame::new()
+                    .fill(SURFACE)
+                    .stroke(Stroke::new(1.0, LINE))
+                    .corner_radius(14.0)
+                    .inner_margin(Margin::symmetric(12, 10))
+                    .show(ui, |ui| {
+                        ui.horizontal_wrapped(|ui| {
+                            Frame::new()
+                                .fill(SURFACE_ALT)
+                                .stroke(Stroke::new(1.0, LINE))
+                                .corner_radius(9.0)
+                                .inner_margin(Margin::symmetric(10, 4))
+                                .show(ui, |ui| {
+                                    ui.horizontal_centered(|ui| {
+                                        icons::image(ui, &self.icons, Icon::Search, 16.0, MUTED);
+                                        ui.add_sized(
+                                            Vec2::new(224.0, 28.0),
+                                            egui::TextEdit::singleline(&mut self.product_query)
+                                                .hint_text("Buscar nome, rótulo ou descrição"),
+                                        );
+                                    });
+                                });
+                            ui.add_space(7.0);
+                            for (filter, label) in [
+                                (CategoryFilter::Todos, "Tudo"),
+                                (CategoryFilter::Adega, "Vinhos"),
+                                (CategoryFilter::Frigobar, "Frigobar"),
+                            ] {
+                                let active = self.adega_category_filter == filter;
+                                if ui
+                                    .add(
+                                        egui::Button::new(label)
+                                            .fill(if active { GREEN_PALE } else { SURFACE_ALT })
+                                            .stroke(Stroke::new(1.0, LINE))
+                                            .corner_radius(9.0),
+                                    )
+                                    .clicked()
+                                {
+                                    self.adega_category_filter = filter;
+                                }
+                            }
+                            ui.separator();
+                            for label in ["Todos", "Baixo", "Esgotado", "Livre"] {
+                                let active = self.adega_stock_filter == label;
+                                if ui
+                                    .add(
+                                        egui::Button::new(label)
+                                            .fill(if active { ORANGE_PALE } else { SURFACE_ALT })
+                                            .stroke(Stroke::new(1.0, LINE))
+                                            .corner_radius(9.0),
+                                    )
+                                    .clicked()
+                                {
+                                    self.adega_stock_filter = label.to_owned();
+                                }
+                            }
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                egui::ComboBox::from_id_salt("adega-sort")
+                                    .selected_text(format!("Ordenar: {}", self.adega_sort))
+                                    .show_ui(ui, |ui| {
+                                        for option in ["Nome", "Menor estoque", "Maior estoque"] {
+                                            ui.selectable_value(
+                                                &mut self.adega_sort,
+                                                option.to_owned(),
+                                                option,
+                                            );
+                                        }
+                                    });
                             });
+                        });
+                    });
+
+                if self.products_loading {
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label(RichText::new("Sincronizando catálogo…").size(11.0).color(MUTED));
+                    });
+                }
+                if let Some(error) = self.product_error.clone() {
+                    ui.add_space(8.0);
+                    Frame::new()
+                        .fill(RED_PALE)
+                        .stroke(Stroke::new(1.0, RED))
+                        .corner_radius(10.0)
+                        .inner_margin(12.0)
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.label(RichText::new(&error).color(INK));
+                                if ui.button("Tentar novamente").clicked() {
+                                    self.product_error = None;
+                                    self.products_loading = true;
+                                    self.request_products(ctx.clone());
+                                }
+                            });
+                        });
+                }
+
+                let query = self.product_query.trim().to_lowercase();
+                let threshold = self.preferences.low_stock_threshold;
+                let mut products: Vec<Product> = self
+                    .products
+                    .iter()
+                    .filter(|product| {
+                        let matches_category = match self.adega_category_filter {
+                            CategoryFilter::Todos => true,
+                            CategoryFilter::Adega => product.category.eq_ignore_ascii_case("adega"),
+                            CategoryFilter::Frigobar => {
+                                product.category.eq_ignore_ascii_case("frigobar")
+                            }
+                        };
+                        let matches_stock = match self.adega_stock_filter.as_str() {
+                            "Baixo" => product
+                                .stock_quantity
+                                .is_some_and(|stock| stock > 0 && stock <= threshold),
+                            "Esgotado" => product.stock_quantity == Some(0),
+                            "Livre" => product.stock_quantity.is_none(),
+                            _ => true,
+                        };
+                        let searchable = format!(
+                            "{} {} {}",
+                            product.name, product.label, product.description
+                        )
+                        .to_lowercase();
+                        matches_category && matches_stock && (query.is_empty() || searchable.contains(&query))
+                    })
+                    .cloned()
+                    .collect();
+                match self.adega_sort.as_str() {
+                    "Menor estoque" => products.sort_by_key(|product| {
+                        product.stock_quantity.unwrap_or(u32::MAX)
+                    }),
+                    "Maior estoque" => products.sort_by_key(|product| {
+                        std::cmp::Reverse(product.stock_quantity.unwrap_or_default())
+                    }),
+                    _ => products.sort_by(|left, right| {
+                        left.label.to_lowercase().cmp(&right.label.to_lowercase())
+                    }),
+                }
+
+                ui.add_space(10.0);
+                let results_label = format!(
+                    "{} {} encontrados",
+                    products.len(),
+                    if products.len() == 1 { "produto" } else { "produtos" }
+                );
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("CATÁLOGO DA ADEGA").size(10.0).strong().color(ORANGE));
+                    ui.add_space(8.0);
+                    ui.label(RichText::new(results_label).size(10.0).color(MUTED));
+                });
+
+                if products.is_empty() {
+                    ui.add_space(8.0);
+                    Frame::new()
+                        .fill(SURFACE)
+                        .stroke(Stroke::new(1.0, LINE))
+                        .corner_radius(16.0)
+                        .inner_margin(Margin::symmetric(20, 36))
+                        .show(ui, |ui| {
+                            ui.vertical_centered(|ui| {
+                                icons::image(ui, &self.icons, Icon::Wine, 38.0, ORANGE);
+                                ui.add_space(8.0);
+                                ui.label(RichText::new("Nenhum rótulo nesta seleção").size(17.0).strong().color(INK));
+                                ui.label(RichText::new("Ajuste a busca ou os filtros para ver outros produtos.").size(11.0).color(MUTED));
+                                if !self.product_query.is_empty() && ui.button("Limpar busca").clicked() {
+                                    self.product_query.clear();
+                                }
+                            });
+                        });
+                } else {
+                    let available_width = ui.available_width();
+                    let columns_count = if available_width >= 1120.0 { 3 } else if available_width >= 730.0 { 2 } else { 1 };
+                    let grid_width = (available_width - 12.0 * (columns_count - 1) as f32) / columns_count as f32;
+                    for chunk in products.chunks(columns_count) {
+                        ui.horizontal_top(|ui| {
+                            for product in chunk {
+                                ui.allocate_ui_with_layout(
+                                    Vec2::new(grid_width, 174.0),
+                                    Layout::top_down(Align::Min),
+                                    |card_ui| self.product_card(card_ui, product, threshold),
+                                );
+                                ui.add_space(12.0);
+                            }
+                        });
+                        ui.add_space(10.0);
                     }
                 }
+
+                let selected_product = self
+                    .selected_product
+                    .as_ref()
+                    .and_then(|selected_id| self.products.iter().find(|item| &item.id == selected_id))
+                    .cloned();
+                if let Some(product) = selected_product {
+                    ui.add_space(4.0);
+                    Frame::new()
+                        .fill(SURFACE_ALT)
+                        .stroke(Stroke::new(1.0, LINE))
+                        .corner_radius(14.0)
+                        .inner_margin(14.0)
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                icons::image(ui, &self.icons, Icon::Wine, 20.0, ORANGE);
+                                ui.vertical(|ui| {
+                                    ui.label(RichText::new(&product.label).size(15.0).strong().color(INK));
+                                    ui.label(RichText::new(&product.description).size(11.0).color(MUTED));
+                                    ui.add_space(4.0);
+                                    ui.label(RichText::new(format!(
+                                        "{}  ·  {}  ·  {}",
+                                        if product.category == "frigobar" { "Frigobar" } else { "Adega" },
+                                        product.stock_quantity.map(|stock| format!("{stock} unidades")).unwrap_or_else(|| "Estoque livre".to_owned()),
+                                        product.promotional_price.as_deref().unwrap_or(&product.price),
+                                    )).size(11.0).color(ORANGE));
+                                });
+                                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                    if ui.button("Fechar detalhes").clicked() {
+                                        self.selected_product = None;
+                                    }
+                                    if ui.button("Abrir gestão do catálogo").clicked() {
+                                        self.settings_page = SettingsPage::Catalogo;
+                                        self.settings_notice = None;
+                                        self.section = Section::Configuracoes;
+                                    }
+                                });
+                            });
+                        });
+                }
+                ui.add_space(20.0);
             });
     }
 
-    fn product_row(&mut self, ui: &mut egui::Ui, product: &Product) {
-        let (rect, response) =
-            ui.allocate_exact_size(Vec2::new(ui.available_width(), 62.0), Sense::click());
-        if response.hovered() {
-            ui.painter().rect_filled(rect, 8.0, SURFACE_ALT);
-        }
-        let image_rect = Rect::from_min_size(
-            Pos2::new(rect.left() + 6.0, rect.top() + 6.0),
-            Vec2::new(50.0, 50.0),
+    fn product_card(&mut self, ui: &mut egui::Ui, product: &Product, low_stock_threshold: u32) {
+        let (rect, response) = ui.allocate_exact_size(
+            Vec2::new(ui.available_width(), 174.0),
+            Sense::click(),
         );
+        ui.painter().rect_filled(
+            rect,
+            13.0,
+            if response.hovered() { SURFACE_ALT } else { SURFACE },
+        );
+        ui.painter().rect_stroke(
+            rect,
+            13.0,
+            Stroke::new(1.0, if response.hovered() { ORANGE } else { LINE }),
+            egui::StrokeKind::Inside,
+        );
+        let image_size = Vec2::new(96.0, 150.0);
+        let image_rect = Rect::from_min_size(
+            Pos2::new(rect.left() + 10.0, rect.top() + 12.0),
+            image_size,
+        );
+        let painter = ui.painter().with_clip_rect(rect.shrink(4.0));
         if let Some(texture) = self.product_images.get(&product.id) {
-            ui.painter().image(
+            painter.image(
                 texture.id(),
                 image_rect,
                 Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
                 Color32::WHITE,
             );
         } else {
-            ui.painter().rect_filled(image_rect, 9.0, GREEN_PALE);
+            painter.rect_filled(image_rect, 9.0, GREEN_PALE);
             icons::paint_in_rect(
                 ui,
                 &self.icons,
@@ -4890,38 +5158,70 @@ impl DashboardApp {
                 GREEN,
             );
         }
-        let x = rect.left() + 76.0;
-        ui.painter().text(
-            Pos2::new(x, rect.center().y - 5.0),
+        let x = image_rect.right() + 12.0;
+        let max_text_width = (rect.right() - x - 12.0).max(70.0);
+        painter.rect_filled(
+            Rect::from_min_size(Pos2::new(x, rect.top() + 12.0), Vec2::new(72.0, 20.0)),
+            7.0,
+            GREEN_PALE,
+        );
+        painter.text(
+            Pos2::new(x + 36.0, rect.top() + 22.0),
+            Align2::CENTER_CENTER,
+            if product.category.eq_ignore_ascii_case("frigobar") { "FRIGOBAR" } else { "ADEGA" },
+            FontId::proportional(9.0),
+            ORANGE,
+        );
+        painter.text(
+            Pos2::new(x, rect.top() + 51.0),
             Align2::LEFT_CENTER,
             &product.label,
-            FontId::proportional(15.0),
-            INK,
-        );
-        ui.painter().text(
-            Pos2::new(x + 300.0, rect.center().y),
-            Align2::LEFT_CENTER,
-            format!("{} garrafas", product.stock_quantity.unwrap_or(0)),
             FontId::proportional(14.0),
-            MUTED,
-        );
-        ui.painter().text(
-            Pos2::new(rect.right() - 68.0, rect.center().y),
-            Align2::RIGHT_CENTER,
-            &product.price,
-            FontId::proportional(15.0),
             INK,
         );
-        icons::paint_in_rect(
-            ui,
-            &self.icons,
-            Icon::ChevronRight,
-            Rect::from_center_size(
-                Pos2::new(rect.right() - 14.0, rect.center().y),
-                Vec2::splat(17.0),
-            ),
+        painter.text(
+            Pos2::new(x, rect.top() + 72.0),
+            Align2::LEFT_CENTER,
+            product.name.chars().take(32).collect::<String>(),
+            FontId::proportional(10.0),
             MUTED,
         );
+        let (stock_label, stock_color) = match product.stock_quantity {
+            Some(0) => ("ESGOTADO".to_owned(), RED),
+            Some(stock) if stock <= low_stock_threshold => (format!("BAIXO · {stock} un."), Color32::from_rgb(229, 174, 107)),
+            Some(stock) => (format!("{stock} un. disponíveis"), GREEN_MID),
+            None => ("ESTOQUE LIVRE".to_owned(), MUTED),
+        };
+        let stock_rect = Rect::from_min_size(
+            Pos2::new(x, rect.top() + 90.0),
+            Vec2::new(max_text_width, 24.0),
+        );
+        painter.rect_filled(stock_rect, 7.0, Color32::from_rgba_unmultiplied(15, 10, 7, 150));
+        painter.circle_filled(Pos2::new(x + 10.0, stock_rect.center().y), 3.0, stock_color);
+        painter.text(
+            Pos2::new(x + 19.0, stock_rect.center().y),
+            Align2::LEFT_CENTER,
+            stock_label,
+            FontId::proportional(9.0),
+            INK,
+        );
+        let price = product.promotional_price.as_deref().unwrap_or(&product.price);
+        painter.text(
+            Pos2::new(x, rect.bottom() - 20.0),
+            Align2::LEFT_CENTER,
+            price,
+            FontId::proportional(16.0),
+            ORANGE,
+        );
+        if product.promotional_price.is_some() {
+            painter.text(
+                Pos2::new(rect.right() - 12.0, rect.bottom() - 20.0),
+                Align2::RIGHT_CENTER,
+                "PROMOÇÃO",
+                FontId::proportional(8.0),
+                MUTED,
+            );
+        }
         if response.clicked() {
             self.selected_product = Some(product.id.clone());
         }
@@ -5213,17 +5513,19 @@ impl eframe::App for DashboardApp {
         }
         let reservation_modal_open =
             self.reservation_form_open || self.reservation_details_id.is_some();
-        if reservation_modal_open && self.modal_backdrop_texture.is_none() {
+        let finance_modal_open = self.movement_form_open || self.payable_form_open;
+        let modal_open = reservation_modal_open || finance_modal_open;
+        if modal_open && self.modal_backdrop_texture.is_none() {
             if let Some(backdrop) = self.pending_modal_backdrop.take() {
                 let size = [backdrop.width() as usize, backdrop.height() as usize];
                 self.modal_backdrop_texture = Some(ctx.load_texture(
-                    "reservation-modal-blurred-backdrop",
+                    "application-modal-blurred-backdrop",
                     egui::ColorImage::from_rgba_unmultiplied(size, backdrop.as_raw()),
                     egui::TextureOptions::LINEAR,
                 ));
             }
         }
-        if reservation_modal_open && self.modal_backdrop_texture.is_some() {
+        if modal_open && self.modal_backdrop_texture.is_some() {
             let bounds = root.max_rect();
             let texture = self.modal_backdrop_texture.as_ref().unwrap();
             root.painter().image(
@@ -5237,10 +5539,19 @@ impl eframe::App for DashboardApp {
                 0.0,
                 Color32::from_rgba_unmultiplied(25, 16, 11, 92),
             );
-            self.reservation_windows(&ctx);
+            if reservation_modal_open {
+                self.reservation_windows(&ctx);
+            }
+            if finance_modal_open {
+                self.finance_windows(&ctx);
+            }
             self.show_update_notice(&ctx);
             self.show_update_prompt(&ctx);
-            if !self.reservation_form_open && self.reservation_details_id.is_none() {
+            if !self.reservation_form_open
+                && self.reservation_details_id.is_none()
+                && !self.movement_form_open
+                && !self.payable_form_open
+            {
                 self.pending_modal_backdrop = None;
                 self.modal_backdrop_texture = None;
             }
@@ -5557,15 +5868,52 @@ fn reservation_wheel_column(
             ui.label(RichText::new(title).size(8.0).strong().color(MUTED));
             // Keep only the selected value visible; the mouse wheel changes it in place.
             let (rect, response) = ui.allocate_exact_size(Vec2::new(width, 32.0), Sense::click());
-            let scroll = if response.hovered() {
-                ui.input(|input| input.smooth_scroll_delta.y)
-            } else {
-                0.0
-            };
-            if scroll.abs() >= 1.0 {
-                let steps = ((scroll.abs() / 32.0).ceil() as i32).clamp(1, 5);
-                let direction = if scroll > 0.0 { -1 } else { 1 };
-                for _ in 0..steps {
+            let mut scroll_steps = 0;
+            if response.hovered() {
+                let (line_delta, page_delta, point_delta) = ui.input(|input| {
+                    input.events.iter().fold(
+                        (0.0_f32, 0.0_f32, 0.0_f32),
+                        |(lines, pages, points), event| match event {
+                            egui::Event::MouseWheel { unit, delta, .. } if delta.y != 0.0 => {
+                                match unit {
+                                    egui::MouseWheelUnit::Line => {
+                                        (lines + delta.y.signum(), pages, points)
+                                    }
+                                    egui::MouseWheelUnit::Page => {
+                                        (lines, pages + delta.y.signum(), points)
+                                    }
+                                    egui::MouseWheelUnit::Point => {
+                                        (lines, pages, points + delta.y)
+                                    }
+                                }
+                            }
+                            _ => (lines, pages, points),
+                        },
+                    )
+                });
+
+                let point_scroll_id = ui.scope_id().with("point-scroll-remainder");
+                let point_steps = ui.ctx().data_mut(|data| {
+                    let previous = data.get_temp::<f32>(point_scroll_id).unwrap_or(0.0);
+                    let mut total = if previous != 0.0
+                        && point_delta != 0.0
+                        && previous.signum() != point_delta.signum()
+                    {
+                        point_delta
+                    } else {
+                        previous + point_delta
+                    };
+                    let direction = total.signum() as i32;
+                    let steps = ((total.abs() / 100.0).floor() as i32).min(3);
+                    total -= direction as f32 * 100.0 * steps as f32;
+                    data.insert_temp(point_scroll_id, total);
+                    steps * direction
+                });
+                scroll_steps = line_delta as i32 + page_delta as i32 + point_steps;
+            }
+            if scroll_steps != 0 {
+                let direction = -scroll_steps.signum();
+                for _ in 0..scroll_steps.abs().min(3) {
                     *value = reservation_wheel_step(*value, direction, min, max, wraps);
                 }
             }
@@ -5846,6 +6194,30 @@ fn settings_heading(ui: &mut egui::Ui, title: &str, subtitle: &str) {
     ui.separator();
 }
 
+fn adega_metric(
+    ui: &mut egui::Ui,
+    title: &str,
+    value: impl ToString,
+    detail: impl Into<String>,
+    accent: Color32,
+) {
+    Frame::new()
+        .fill(SURFACE)
+        .stroke(Stroke::new(1.0, LINE))
+        .corner_radius(13.0)
+        .inner_margin(Margin::symmetric(14, 11))
+        .show(ui, |ui| {
+            ui.label(RichText::new(title).size(9.0).strong().color(MUTED));
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(value.to_string()).size(23.0).strong().color(accent));
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    ui.label(RichText::new(detail.into()).size(9.0).color(MUTED));
+                });
+            });
+        });
+}
+
 fn settings_field(ui: &mut egui::Ui, label: &str, value: &mut String, hint: &str) {
     ui.add_space(7.0);
     ui.label(RichText::new(label).size(12.0).strong().color(INK));
@@ -5992,6 +6364,127 @@ fn new_record_id() -> String {
         .unwrap_or_default()
         .as_millis();
     format!("{millis}-{}", std::process::id())
+}
+
+fn finance_glass_dropdown(
+    ui: &mut egui::Ui,
+    id: &'static str,
+    selected: &mut String,
+    options: impl IntoIterator<Item = &'static str>,
+    width: f32,
+    backdrop_texture: &mut Option<TextureHandle>,
+) {
+    let popup_id = ui.make_persistent_id(id);
+    let popup_was_open = egui::Popup::is_id_open(ui.ctx(), popup_id);
+    let response = ui.add_sized(
+        Vec2::new(width, 32.0),
+        egui::Button::new(RichText::new(selected.as_str()).size(12.0).color(INK))
+            .fill(SURFACE_ALT)
+            .stroke(Stroke::new(1.0, LINE))
+            .corner_radius(7.0),
+    );
+    ui.painter().text(
+        Pos2::new(response.rect.right() - 16.0, response.rect.center().y),
+        egui::Align2::CENTER_CENTER,
+        "⌄",
+        FontId::proportional(14.0),
+        INK,
+    );
+
+    if response.clicked() && !popup_was_open {
+        *backdrop_texture = capture_blurred_backdrop().map(|backdrop| {
+            let size = [backdrop.width() as usize, backdrop.height() as usize];
+            ui.ctx().load_texture(
+                format!("{id}-blurred-backdrop"),
+                egui::ColorImage::from_rgba_unmultiplied(size, backdrop.as_raw()),
+                egui::TextureOptions::LINEAR,
+            )
+        });
+    } else if response.clicked() {
+        *backdrop_texture = None;
+    }
+
+    let backdrop = backdrop_texture.clone();
+    let has_backdrop = backdrop.is_some();
+    egui::Popup::menu(&response)
+        .id(popup_id)
+        .align(egui::RectAlign::BOTTOM_START)
+        .gap(1.0)
+        .width(width)
+        .style(egui::style::StyleModifier::new(move |style| {
+            style.visuals.window_fill = if has_backdrop {
+                Color32::TRANSPARENT
+            } else {
+                SURFACE
+            };
+            style.visuals.window_stroke = Stroke::new(1.0, LINE);
+            style.visuals.widgets.noninteractive.bg_fill = Color32::TRANSPARENT;
+            style.visuals.widgets.inactive.bg_fill = Color32::TRANSPARENT;
+            style.visuals.widgets.hovered.bg_fill = ORANGE_PALE;
+            style.visuals.widgets.active.bg_fill = GREEN_PALE;
+            style.visuals.selection.bg_fill = ORANGE_PALE;
+        }))
+        .frame(Frame::NONE)
+        .show(|popup_ui| {
+            popup_ui.set_min_width(width);
+            let viewport = popup_ui.ctx().content_rect();
+            let menu_rect = popup_ui.max_rect().intersect(viewport);
+            if let Some(texture) = &backdrop {
+                let uv_rect = Rect::from_min_max(
+                    Pos2::new(
+                        (menu_rect.left() - viewport.left()) / viewport.width(),
+                        (menu_rect.top() - viewport.top()) / viewport.height(),
+                    ),
+                    Pos2::new(
+                        (menu_rect.right() - viewport.left()) / viewport.width(),
+                        (menu_rect.bottom() - viewport.top()) / viewport.height(),
+                    ),
+                );
+                popup_ui
+                    .painter()
+                    .image(texture.id(), menu_rect, uv_rect, Color32::WHITE);
+                popup_ui.painter().rect_filled(
+                    menu_rect,
+                    8.0,
+                    Color32::from_rgba_unmultiplied(48, 29, 19, 118),
+                );
+            }
+
+            Frame::new()
+                .fill(if has_backdrop {
+                    Color32::TRANSPARENT
+                } else {
+                    SURFACE
+                })
+                .stroke(Stroke::new(1.0, LINE))
+                .corner_radius(8.0)
+                .inner_margin(Margin::same(5))
+                .show(popup_ui, |popup_ui| {
+                    egui::ScrollArea::vertical()
+                        .id_salt((id, "options-scroll"))
+                        .max_height(220.0)
+                        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+                        .auto_shrink([false, false])
+                        .show(popup_ui, |options_ui| {
+                            for option in options {
+                                let option_response = options_ui.add_sized(
+                                    Vec2::new(width - 12.0, 31.0),
+                                    egui::Button::selectable(
+                                        selected == option,
+                                        RichText::new(option).size(12.0).color(INK),
+                                    )
+                                    .corner_radius(6.0),
+                                );
+                                if option_response.clicked() {
+                                    *selected = option.to_owned();
+                                }
+                            }
+                        });
+                });
+        });
+    if !egui::Popup::is_id_open(ui.ctx(), popup_id) {
+        *backdrop_texture = None;
+    }
 }
 
 fn payment_methods() -> &'static [&'static str] {
