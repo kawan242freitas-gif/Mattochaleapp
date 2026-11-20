@@ -104,13 +104,6 @@ enum DayStatus {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-enum ReservationTab {
-    #[default]
-    Overview,
-    Finance,
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum FinanceTab {
     #[default]
     Movements,
@@ -246,7 +239,6 @@ pub struct DashboardApp {
     selected_range: Option<(u32, u32)>,
     selected_calendar_day: String,
     calendar_chalet_filter: String,
-    reservation_tab: ReservationTab,
     blocked_dates: HashSet<String>,
     occupied_dates: HashSet<String>,
     selected_chalet: u8,
@@ -376,7 +368,6 @@ impl DashboardApp {
             selected_range: Some((initial_day, initial_day)),
             selected_calendar_day: date_key(initial_year, initial_month, initial_day),
             calendar_chalet_filter: "Todos".to_owned(),
-            reservation_tab: ReservationTab::Overview,
             blocked_dates,
             occupied_dates: HashSet::new(),
             selected_chalet: 1,
@@ -772,7 +763,7 @@ impl DashboardApp {
                         let profile_width = (name_width + 84.0).clamp(120.0, 260.0);
                         let capsule = Rect::from_center_size(
                             Pos2::new(rect.center().x, rect.center().y),
-                            Vec2::new(profile_width, 44.0),
+                            Vec2::new(profile_width, 38.0),
                         );
                         let painter = ui.painter().clone();
                         painter.rect_filled(capsule, 22.0, Color32::from_rgb(38, 24, 16));
@@ -826,15 +817,17 @@ impl DashboardApp {
                             chevron_rect,
                             MUTED,
                         );
-                        let arrow_response = ui.interact(
-                            Rect::from_center_size(chevron_rect.center(), Vec2::splat(26.0)),
+                        let profile_response = ui.interact(
+                            capsule,
                             ui.scope_id().with("profile-functions-menu-button"),
                             Sense::click(),
                         );
-                        arrow_response.clone().on_hover_text("Abrir menu");
-                        egui::Popup::menu(&arrow_response)
+                        profile_response.clone().on_hover_text("Abrir menu");
+                        egui::Popup::menu(&profile_response)
                             .id(egui::Id::new("profile-functions-menu"))
-                            .width(206.0)
+                            .align(egui::RectAlign::BOTTOM)
+                            .gap(2.0)
+                            .width(170.0)
                             .style(egui::style::StyleModifier::new(|style| {
                                 style.visuals.window_fill = SURFACE;
                                 style.visuals.window_stroke = Stroke::new(1.0, LINE);
@@ -851,9 +844,9 @@ impl DashboardApp {
                                             &self.icons,
                                             Icon::Sofa,
                                             "Home",
-                                            self.section == Section::Launcher,
+                                            self.section == Section::Reservas,
                                         ) {
-                                            self.section = Section::Launcher;
+                                            self.section = Section::Reservas;
                                         }
                                         if profile_menu_item(
                                             menu_ui,
@@ -1520,38 +1513,6 @@ impl DashboardApp {
         const OCCUPIED: Color32 = Color32::from_rgb(174, 82, 52);
 
         ui.painter().rect_filled(ui.max_rect(), 0.0, BG);
-        ui.horizontal(|ui| {
-            for (tab, label) in [
-                (ReservationTab::Overview, "Visão geral"),
-                (ReservationTab::Finance, "Financeiro"),
-            ] {
-                let selected = self.reservation_tab == tab;
-                let response = ui.add_sized(
-                    Vec2::new(130.0, 34.0),
-                    egui::Button::new(
-                        RichText::new(label).size(12.0).strong().color(if selected {
-                            INK
-                        } else {
-                            MUTED
-                        }),
-                    )
-                    .fill(if selected { ORANGE_PALE } else { SURFACE })
-                    .stroke(Stroke::new(1.0, LINE))
-                    .corner_radius(10.0),
-                );
-                if response.clicked() {
-                    self.reservation_tab = tab;
-                    if tab == ReservationTab::Finance {
-                        self.finance_tab = FinanceTab::Movements;
-                    }
-                }
-            }
-        });
-        ui.add_space(8.0);
-        if self.reservation_tab == ReservationTab::Finance {
-            self.show_financas(ui);
-            return;
-        }
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
@@ -1624,15 +1585,26 @@ impl DashboardApp {
                             .show(|popup_ui| {
                                 if let Some(texture) = &self.chalet_filter_backdrop_texture {
                                     let viewport = popup_ui.ctx().content_rect();
+                                    let menu_rect = popup_ui.max_rect().expand(8.0).intersect(viewport);
+                                    let uv_rect = Rect::from_min_max(
+                                        Pos2::new(
+                                            (menu_rect.left() - viewport.left()) / viewport.width(),
+                                            (menu_rect.top() - viewport.top()) / viewport.height(),
+                                        ),
+                                        Pos2::new(
+                                            (menu_rect.right() - viewport.left()) / viewport.width(),
+                                            (menu_rect.bottom() - viewport.top()) / viewport.height(),
+                                        ),
+                                    );
                                     popup_ui.painter().image(
                                         texture.id(),
-                                        viewport,
-                                        Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+                                        menu_rect,
+                                        uv_rect,
                                         Color32::WHITE,
                                     );
                                     popup_ui.painter().rect_filled(
-                                        viewport,
-                                        0.0,
+                                        menu_rect,
+                                        8.0,
                                         Color32::from_rgba_unmultiplied(48, 29, 19, 86),
                                     );
                                 }
@@ -2125,6 +2097,8 @@ impl DashboardApp {
                             )
                             .clicked()
                         {
+                            self.pending_modal_backdrop = capture_blurred_backdrop();
+                            self.modal_backdrop_texture = None;
                             self.reservation_details_id = Some(reservation.id.clone());
                         }
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -2186,8 +2160,10 @@ impl DashboardApp {
                 ..ReservationForm::default()
             }
         };
-        self.pending_modal_backdrop = capture_blurred_backdrop();
-        self.modal_backdrop_texture = None;
+        if self.reservation_details_id.is_none() {
+            self.pending_modal_backdrop = capture_blurred_backdrop();
+            self.modal_backdrop_texture = None;
+        }
         self.reservation_form_open = true;
         self.notice = None;
     }
@@ -2199,59 +2175,65 @@ impl DashboardApp {
             let mut cancel = false;
             egui::Window::new(if self.editing_reservation_id.is_some() { "Editar reserva" } else { "Nova reserva" })
                 .id(egui::Id::new("reservation-editor"))
-                .open(&mut open).collapsible(false).resizable(true).default_width(560.0).max_width(700.0)
+                .open(&mut open)
+                .collapsible(false)
+                .resizable(false)
+                .fixed_pos(ctx.content_rect().center())
+                .pivot(Align2::CENTER_CENTER)
+                .fixed_size(Vec2::new(700.0, 820.0))
                 .show(ctx, |ui| {
+                    ui.spacing_mut().item_spacing.y = 4.0;
                     ui.label(RichText::new("MARQUE UMA NOVA ESTADIA").size(10.0).strong().color(ORANGE));
-                    egui::ScrollArea::vertical().max_height(640.0).show(ui, |ui| {
-                        ui.label("Nome do responsável");
-                        ui.text_edit_singleline(&mut self.reservation_form.responsible);
-                        ui.horizontal(|ui| {
-                            ui.vertical(|ui| {
-                                ui.label("Chalé");
-                                egui::ComboBox::from_id_salt("reservation-form-chalet").selected_text(&self.reservation_form.chalet).show_ui(ui, |ui| {
-                                    for chalet in &self.preferences.chalet_names { ui.selectable_value(&mut self.reservation_form.chalet, chalet.clone(), chalet); }
-                                });
-                            });
-                            ui.vertical(|ui| {
-                                ui.label("Quantidade de pessoas");
-                                ui.add(egui::TextEdit::singleline(&mut self.reservation_form.guests).desired_width(100.0));
+                    ui.label("Nome do responsável");
+                    ui.text_edit_singleline(&mut self.reservation_form.responsible);
+                    ui.horizontal(|ui| {
+                        ui.vertical(|ui| {
+                            ui.label("Chalé");
+                            egui::ComboBox::from_id_salt("reservation-form-chalet").selected_text(&self.reservation_form.chalet).show_ui(ui, |ui| {
+                                for chalet in &self.preferences.chalet_names { ui.selectable_value(&mut self.reservation_form.chalet, chalet.clone(), chalet); }
                             });
                         });
-                        ui.horizontal(|ui| {
-                            reservation_date_wheel(ui, "Entrada", "check-in-date", &mut self.reservation_form.check_in);
-                            reservation_date_wheel(ui, "Saída", "check-out-date", &mut self.reservation_form.check_out);
+                        ui.vertical(|ui| {
+                            ui.label("Quantidade de pessoas");
+                            ui.add(egui::TextEdit::singleline(&mut self.reservation_form.guests).desired_width(100.0));
                         });
-                        ui.horizontal(|ui| {
-                            reservation_time_wheel(ui, "Horário de entrada", "check-in-time", &mut self.reservation_form.check_in_time);
-                            reservation_time_wheel(ui, "Horário de saída", "check-out-time", &mut self.reservation_form.check_out_time);
-                        });
-                        ui.label(RichText::new("A data de saída libera o chalé para uma nova entrada no mesmo dia.").size(10.0).color(MUTED));
-                        ui.horizontal(|ui| {
-                            reservation_toggle(ui, &mut self.reservation_form.pets, "Leva pets");
-                            reservation_toggle(ui, &mut self.reservation_form.breakfast, "Café da manhã");
-                        });
-                        ui.horizontal(|ui| {
-                            reservation_toggle(ui, &mut self.reservation_form.decoration, "Decoração");
-                            reservation_toggle(ui, &mut self.reservation_form.reserved, "Status reservado");
-                        });
-                        ui.label("Intolerâncias ou restrições do café");
-                        ui.text_edit_singleline(&mut self.reservation_form.restrictions);
-                        ui.label("Observações");
-                        ui.add(egui::TextEdit::multiline(&mut self.reservation_form.notes).desired_rows(3));
-                        ui.horizontal(|ui| {
-                            if ui.add(egui::Button::new("Anexar documentos").fill(SURFACE_ALT).stroke(Stroke::new(1.0, LINE)).corner_radius(8.0)).clicked() {
-                                if let Some(paths) = rfd::FileDialog::new().pick_files() {
-                                    self.reservation_form.attachments.extend(paths.into_iter().map(|path| path.to_string_lossy().to_string()));
-                                }
+                    });
+                    ui.horizontal(|ui| {
+                        reservation_date_wheel(ui, "Entrada", "check-in-date", &mut self.reservation_form.check_in);
+                        reservation_date_wheel(ui, "Saída", "check-out-date", &mut self.reservation_form.check_out);
+                    });
+                    ui.horizontal(|ui| {
+                        reservation_time_wheel(ui, "Horário de entrada", "check-in-time", &mut self.reservation_form.check_in_time);
+                        reservation_time_wheel(ui, "Horário de saída", "check-out-time", &mut self.reservation_form.check_out_time);
+                    });
+                    ui.label(RichText::new("A data de saída libera o chalé para uma nova entrada no mesmo dia.").size(10.0).color(MUTED));
+                    ui.horizontal(|ui| {
+                        reservation_toggle(ui, &mut self.reservation_form.pets, "Leva pets");
+                        reservation_toggle(ui, &mut self.reservation_form.breakfast, "Café da manhã");
+                    });
+                    ui.horizontal(|ui| {
+                        reservation_toggle(ui, &mut self.reservation_form.decoration, "Decoração");
+                        reservation_toggle(ui, &mut self.reservation_form.reserved, "Status reservado");
+                    });
+                    ui.label("Intolerâncias ou restrições do café");
+                    ui.text_edit_singleline(&mut self.reservation_form.restrictions);
+                    ui.label("Observações");
+                    ui.add(egui::TextEdit::multiline(&mut self.reservation_form.notes).desired_rows(3));
+                    ui.horizontal(|ui| {
+                        if ui.add(egui::Button::new("Anexar documentos").fill(SURFACE_ALT).stroke(Stroke::new(1.0, LINE)).corner_radius(8.0)).clicked() {
+                            if let Some(paths) = rfd::FileDialog::new().pick_files() {
+                                self.reservation_form.attachments.extend(paths.into_iter().map(|path| path.to_string_lossy().to_string()));
                             }
-                            ui.label(RichText::new(format!("{} arquivo(s)", self.reservation_form.attachments.len())).size(10.0).color(MUTED));
-                        });
-                        for path in &self.reservation_form.attachments { ui.label(RichText::new(file_name(path)).size(9.0).color(MUTED)); }
-                        if let Some(error) = &self.notice { ui.label(RichText::new(error).size(10.0).color(RED)); }
-                        ui.horizontal(|ui| {
-                            if ui.add(egui::Button::new("Cancelar").fill(SURFACE_ALT).stroke(Stroke::new(1.0, LINE)).corner_radius(8.0)).clicked() { cancel = true; }
-                            if ui.add_enabled(!self.reservation_form.responsible.trim().is_empty(), egui::Button::new("Salvar e marcar no calendário").fill(Color32::from_rgb(153, 87, 38)).stroke(Stroke::new(1.0, LINE)).corner_radius(9.0)).clicked() { save = true; }
-                        });
+                        }
+                        ui.label(RichText::new(format!("{} arquivo(s)", self.reservation_form.attachments.len())).size(10.0).color(MUTED));
+                    });
+                    for path in &self.reservation_form.attachments {
+                        ui.label(RichText::new(file_name(path)).size(9.0).color(MUTED));
+                    }
+                    if let Some(error) = &self.notice { ui.label(RichText::new(error).size(10.0).color(RED)); }
+                    ui.horizontal(|ui| {
+                        if ui.add(egui::Button::new("Cancelar").fill(SURFACE_ALT).stroke(Stroke::new(1.0, LINE)).corner_radius(8.0)).clicked() { cancel = true; }
+                        if ui.add_enabled(!self.reservation_form.responsible.trim().is_empty(), egui::Button::new("Salvar e marcar no calendário").fill(Color32::from_rgb(153, 87, 38)).stroke(Stroke::new(1.0, LINE)).corner_radius(9.0)).clicked() { save = true; }
                     });
                 });
             self.reservation_form_open = open && !cancel;
@@ -2269,63 +2251,171 @@ impl DashboardApp {
                 .cloned();
             let mut open = reservation.is_some();
             let mut edit = false;
-            egui::Window::new("Detalhes da reserva")
+            let mut delete = false;
+            let mut close_requested = false;
+            let mut status_reserved = reservation.as_ref().is_some_and(|item| item.reserved);
+            egui::Window::new(" ")
                 .id(egui::Id::new("reservation-details"))
                 .open(&mut open)
+                .title_bar(false)
                 .collapsible(false)
-                .resizable(true)
-                .default_width(500.0)
+                .resizable(false)
+                .fixed_pos(ctx.content_rect().center())
+                .pivot(Align2::CENTER_CENTER)
+                .fixed_size(Vec2::new(420.0, 670.0))
+                .frame(
+                    Frame::new()
+                        .fill(SURFACE)
+                        .stroke(Stroke::new(1.0, LINE))
+                        .corner_radius(16.0)
+                        .inner_margin(Margin::same(16)),
+                )
                 .show(ctx, |ui| {
                     if let Some(item) = &reservation {
-                        ui.heading(&item.responsible);
-                        ui.label(format!(
-                            "{} · {} hóspede(s) · {}",
-                            item.chalet,
-                            item.guests,
-                            if item.reserved {
-                                "Reservado"
-                            } else {
-                                "Rascunho"
+                        ui.spacing_mut().item_spacing.y = 8.0;
+                        ui.horizontal(|ui| {
+                            ui.vertical(|ui| {
+                                ui.label(RichText::new("DETALHES DA RESERVA").size(9.0).strong().color(MUTED));
+                                ui.label(RichText::new(&item.responsible).size(18.0).strong().color(INK));
+                                ui.label(RichText::new(format!("{} · {} pessoas", item.chalet, item.guests)).size(10.0).color(MUTED));
+                            });
+                            ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
+                                let close = ui.add_sized(Vec2::splat(30.0), egui::Button::new("").fill(SURFACE_ALT).stroke(Stroke::new(1.0, LINE)).corner_radius(8.0));
+                                icons::paint_in_rect(ui, &self.icons, Icon::X, Rect::from_center_size(close.rect.center(), Vec2::splat(14.0)), INK);
+                                if close.clicked() {
+                                    close_requested = true;
+                                }
+                            });
+                        });
+
+                        ui.horizontal(|ui| {
+                            for (label, date, time) in [
+                                ("Entrada", &item.check_in, &item.check_in_time),
+                                ("Saída", &item.check_out, &item.check_out_time),
+                            ] {
+                                Frame::new()
+                                    .fill(SURFACE_ALT)
+                                    .corner_radius(9.0)
+                                    .inner_margin(Margin::same(9))
+                                    .show(ui, |ui| {
+                                        ui.set_min_width(164.0);
+                                        ui.label(RichText::new(if label == "Entrada" { "↘" } else { "↗" }).size(12.0).color(ORANGE));
+                                        ui.label(RichText::new(label).size(9.0).color(MUTED));
+                                        ui.label(RichText::new(format!("{} · {}", format_date_label(date), time)).size(10.0).strong().color(INK));
+                                    });
                             }
-                        ));
-                        ui.separator();
-                        ui.label(format!(
-                            "Entrada: {} às {}",
-                            format_date_label(&item.check_in),
-                            item.check_in_time
-                        ));
-                        ui.label(format!(
-                            "Saída: {} às {}",
-                            format_date_label(&item.check_out),
-                            item.check_out_time
-                        ));
-                        ui.label(format!(
-                            "Pets: {} · Café: {} · Decoração: {}",
-                            yes_no(item.pets),
-                            yes_no(item.breakfast),
-                            yes_no(item.decoration)
-                        ));
-                        ui.label(format!("Restrições: {}", empty_as_dash(&item.restrictions)));
-                        ui.label(format!("Observações: {}", empty_as_dash(&item.notes)));
-                        ui.separator();
-                        ui.label(
-                            RichText::new(format!(
-                                "Documentos anexados ({})",
-                                item.attachments.len()
-                            ))
-                            .strong(),
-                        );
-                        for path in &item.attachments {
-                            if ui.link(file_name(path)).clicked() {
-                                let _ = open::that(path);
-                            }
+                        });
+
+                        Frame::new()
+                            .fill(SURFACE_ALT)
+                            .stroke(Stroke::new(1.0, LINE))
+                            .corner_radius(9.0)
+                            .inner_margin(Margin::same(9))
+                            .show(ui, |ui| {
+                                ui.label(RichText::new("Controle de estadia").size(9.0).strong().color(MUTED));
+                                egui::ComboBox::from_id_salt("reservation-detail-status")
+                                    .selected_text(if status_reserved { "Reservado" } else { "Rascunho" })
+                                    .width(ui.available_width())
+                                    .show_ui(ui, |ui| {
+                                        ui.selectable_value(&mut status_reserved, true, "Reservado");
+                                        ui.selectable_value(&mut status_reserved, false, "Rascunho");
+                                    });
+                            });
+
+                        ui.horizontal(|ui| {
+                            reservation_detail_chip(ui, &format!("{} hóspedes", item.guests));
+                            reservation_detail_chip(ui, if item.pets { "Com pets" } else { "Sem pets" });
+                        });
+                        ui.horizontal(|ui| {
+                            reservation_detail_chip(ui, if item.breakfast { "Café incluído" } else { "Sem café" });
+                            reservation_detail_chip(ui, if item.decoration { "Com decoração" } else { "Sem decoração" });
+                        });
+
+                        Frame::new()
+                            .fill(SURFACE_ALT)
+                            .corner_radius(9.0)
+                            .inner_margin(Margin::same(9))
+                            .show(ui, |ui| {
+                                ui.label(RichText::new("RESTRIÇÕES E OBSERVAÇÕES").size(9.0).strong().color(MUTED));
+                                let details = [
+                                    (!item.restrictions.trim().is_empty()).then_some(item.restrictions.as_str()),
+                                    (!item.notes.trim().is_empty()).then_some(item.notes.as_str()),
+                                ].into_iter().flatten().collect::<Vec<_>>().join(" · ");
+                                ui.label(RichText::new(if details.is_empty() { "Sem observações informadas" } else { &details }).size(10.0).color(INK));
+                            });
+
+                        ui.label(RichText::new("DOCUMENTOS ANEXADOS").size(9.0).strong().color(MUTED));
+                        if item.attachments.is_empty() {
+                            Frame::new()
+                                .fill(SURFACE_ALT)
+                                .stroke(Stroke::new(1.0, LINE))
+                                .corner_radius(9.0)
+                                .inner_margin(Margin::same(10))
+                                .show(ui, |ui| { ui.label(RichText::new("Nenhum documento anexado").size(10.0).color(MUTED)); });
+                        } else {
+                            egui::ScrollArea::vertical().max_height(218.0).show(ui, |ui| {
+                                for (index, path) in item.attachments.iter().enumerate() {
+                                    Frame::new()
+                                        .fill(SURFACE_ALT)
+                                        .stroke(Stroke::new(1.0, LINE))
+                                        .corner_radius(9.0)
+                                        .inner_margin(Margin::symmetric(9, 7))
+                                        .show(ui, |ui| {
+                                            ui.set_min_width(ui.available_width());
+                                            ui.horizontal(|ui| {
+                                                ui.label(RichText::new("▤").size(15.0).color(ORANGE));
+                                                ui.vertical(|ui| {
+                                                    ui.add_sized(Vec2::new(284.0, 15.0), egui::Label::new(RichText::new(file_name(path)).size(10.0).strong().color(INK)).truncate());
+                                                    ui.label(RichText::new(attachment_metadata(path)).size(8.0).color(MUTED));
+                                                });
+                                                let download = ui.add_sized(Vec2::splat(28.0), egui::Button::new("↓").fill(ORANGE_PALE).stroke(Stroke::NONE).corner_radius(7.0));
+                                                if download.on_hover_text("Abrir documento").clicked() {
+                                                    let _ = open::that(path);
+                                                }
+                                            });
+                                        });
+                                    if index + 1 < item.attachments.len() { ui.add_space(5.0); }
+                                }
+                            });
                         }
-                        if ui.button("Editar reserva").clicked() {
-                            edit = true;
-                        }
+
+                        ui.horizontal(|ui| {
+                            let edit_button = ui.add_sized(
+                                Vec2::new(ui.available_width() - 38.0, 34.0),
+                                egui::Button::new(RichText::new("   Editar reserva").size(11.0).strong().color(INK))
+                                    .fill(GREEN)
+                                    .corner_radius(9.0),
+                            );
+                            icons::paint_in_rect(ui, &self.icons, Icon::Pencil, Rect::from_center_size(Pos2::new(edit_button.rect.left() + 17.0, edit_button.rect.center().y), Vec2::splat(14.0)), INK);
+                            if edit_button.clicked() { edit = true; }
+                            let delete_button = ui.add_sized(
+                                Vec2::splat(34.0),
+                                egui::Button::new("")
+                                    .fill(RED_PALE)
+                                    .stroke(Stroke::new(1.0, RED))
+                                    .corner_radius(9.0),
+                            );
+                            icons::paint_in_rect(ui, &self.icons, Icon::Trash, Rect::from_center_size(delete_button.rect.center(), Vec2::splat(15.0)), RED);
+                            if delete_button.on_hover_text("Excluir reserva").clicked() { delete = true; }
+                        });
                     }
                 });
-            if !open {
+            if close_requested {
+                open = false;
+            }
+            if let Some(item) = reservation.as_ref() {
+                if status_reserved != item.reserved {
+                    if let Some(saved) = self.business_data.reservations.iter_mut().find(|saved| saved.id == item.id) {
+                        saved.reserved = status_reserved;
+                    }
+                    self.persist_business_data();
+                }
+            }
+            if delete {
+                self.business_data.reservations.retain(|item| item.id != id);
+                self.persist_business_data();
+                self.reservation_details_id = None;
+            } else if !open {
                 self.reservation_details_id = None;
             }
             if edit {
@@ -2456,17 +2546,6 @@ impl DashboardApp {
     fn show_financas(&mut self, ui: &mut egui::Ui) {
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             ui.add_space(14.0);
-            if self.section == Section::Financas {
-                ui.horizontal(|ui| {
-                    if ui.selectable_label(false, "Visão geral").clicked() {
-                        self.section = Section::Reservas;
-                        self.reservation_tab = ReservationTab::Overview;
-                    }
-                    ui.add_space(8.0);
-                    let _ = ui.selectable_label(true, RichText::new("Financeiro").strong());
-                });
-                ui.add_space(8.0);
-            }
             ui.horizontal(|ui| {
                 ui.vertical(|ui| {
                     ui.label(RichText::new("CONTROLE FINANCEIRO").size(10.0).strong().color(ORANGE));
@@ -4290,7 +4369,9 @@ impl eframe::App for DashboardApp {
         self.last_context = ctx.clone();
         self.advance_profile_animation(&ctx);
         self.handle_events(&ctx);
-        if self.reservation_form_open && self.modal_backdrop_texture.is_none() {
+        let reservation_modal_open =
+            self.reservation_form_open || self.reservation_details_id.is_some();
+        if reservation_modal_open && self.modal_backdrop_texture.is_none() {
             if let Some(backdrop) = self.pending_modal_backdrop.take() {
                 let size = [backdrop.width() as usize, backdrop.height() as usize];
                 self.modal_backdrop_texture = Some(ctx.load_texture(
@@ -4300,7 +4381,7 @@ impl eframe::App for DashboardApp {
                 ));
             }
         }
-        if self.reservation_form_open && self.modal_backdrop_texture.is_some() {
+        if reservation_modal_open && self.modal_backdrop_texture.is_some() {
             let bounds = root.max_rect();
             let texture = self.modal_backdrop_texture.as_ref().unwrap();
             root.painter().image(
@@ -4315,7 +4396,7 @@ impl eframe::App for DashboardApp {
                 Color32::from_rgba_unmultiplied(25, 16, 11, 92),
             );
             self.reservation_windows(&ctx);
-            if !self.reservation_form_open {
+            if !self.reservation_form_open && self.reservation_details_id.is_none() {
                 self.pending_modal_backdrop = None;
                 self.modal_backdrop_texture = None;
             }
@@ -4678,7 +4759,7 @@ fn profile_menu_item(
     selected: bool,
 ) -> bool {
     let response = ui.add_sized(
-        Vec2::new(188.0, 38.0),
+        Vec2::new(144.0, 38.0),
         egui::Button::new("")
             .fill(if selected {
                 Color32::from_rgb(73, 45, 28)
@@ -5142,8 +5223,37 @@ fn file_name(path: &str) -> &str {
     path.rsplit(['\\', '/']).next().unwrap_or(path)
 }
 
-fn yes_no(value: bool) -> &'static str {
-    if value { "Sim" } else { "Não" }
+fn attachment_metadata(path: &str) -> String {
+    let extension = PathBuf::from(path)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .unwrap_or("arquivo")
+        .to_ascii_lowercase();
+    let kind = match extension.as_str() {
+        "pdf" => "application/pdf".to_owned(),
+        "png" => "image/png".to_owned(),
+        "jpg" | "jpeg" => "image/jpeg".to_owned(),
+        "zip" => "application/zip".to_owned(),
+        _ => extension,
+    };
+    let size = fs::metadata(path).map(|metadata| metadata.len()).unwrap_or(0);
+    let size_label = if size >= 1024 * 1024 {
+        format!("{:.1} MB", size as f64 / (1024.0 * 1024.0))
+    } else {
+        format!("{} KB", size.div_ceil(1024))
+    };
+    format!("{kind} · {size_label}")
+}
+
+fn reservation_detail_chip(ui: &mut egui::Ui, label: &str) {
+    Frame::new()
+        .fill(SURFACE_ALT)
+        .corner_radius(7.0)
+        .inner_margin(Margin::symmetric(8, 6))
+        .show(ui, |ui| {
+            ui.set_min_width((ui.available_width() - 4.0).max(160.0));
+            ui.label(RichText::new(label).size(9.0).strong().color(INK));
+        });
 }
 
 fn empty_as_dash(value: &str) -> &str {
