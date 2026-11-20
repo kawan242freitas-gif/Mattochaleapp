@@ -937,7 +937,7 @@ impl DashboardApp {
                         }
                     });
 
-                    if !launcher && !self.profile_name.trim().is_empty() {
+                    if !self.profile_name.trim().is_empty() {
                         let name_width = self.profile_name.chars().count() as f32 * 7.3;
                         let profile_width = (name_width + 84.0).clamp(120.0, 260.0);
                         let capsule = Rect::from_center_size(
@@ -1319,40 +1319,7 @@ impl DashboardApp {
                             Sense::click(),
                         )
                     };
-                if self.update_available.is_some() {
-                    let (red, pulse) = self.update_indicator(&ctx);
-                    let badge_center = Pos2::new(
-                        profile_capsule.right() - 7.0,
-                        profile_capsule.bottom() - 7.0,
-                    );
-                    painter.circle_stroke(
-                        badge_center,
-                        9.0 + pulse * 2.0,
-                        Stroke::new(
-                            1.2,
-                            Color32::from_rgba_unmultiplied(247, 72, 64, (pulse * 130.0) as u8),
-                        ),
-                    );
-                    icons::paint_in_rect(
-                        ui,
-                        &self.icons,
-                        Icon::OctagonExclamationPoint,
-                        Rect::from_center_size(badge_center, Vec2::splat(18.0)),
-                        red,
-                    );
-                    let update_response = ui.interact(
-                        profile_capsule,
-                        ui.scope_id().with("launcher-update-profile-button"),
-                        Sense::click(),
-                    );
-                    if update_response
-                        .on_hover_text("Nova atualização disponível")
-                        .clicked()
-                    {
-                        self.update_prompt_open = true;
-                    }
-                    ctx.request_repaint_after(Duration::from_millis(70));
-                } else if profile_response.on_hover_text("Configurações").clicked() {
+                if profile_response.on_hover_text("Configurações").clicked() {
                     self.section = Section::Configuracoes;
                 }
 
@@ -1821,6 +1788,8 @@ impl DashboardApp {
         ui.painter().rect_filled(ui.max_rect(), 0.0, BG);
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
+            .scroll_source(egui::scroll_area::ScrollSource::NONE)
+            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
             .show(ui, |ui| {
                 ui.add_space(14.0);
                 ui.horizontal(|ui| {
@@ -2919,6 +2888,7 @@ impl DashboardApp {
                                             Color32::from_rgb(91, 54, 29);
                                     }))
                                     .show(|popup_ui| {
+                                        popup_ui.set_min_width(status_response.rect.width());
                                         if let Some(texture) = &status_backdrop {
                                             let viewport = popup_ui.ctx().content_rect();
                                             let menu_rect =
@@ -3110,31 +3080,51 @@ impl DashboardApp {
                                                         16.0,
                                                         ORANGE,
                                                     );
-                                                    ui.vertical(|ui| {
-                                                        ui.add_sized(
-                                                            Vec2::new(284.0, 15.0),
-                                                            egui::Label::new(
-                                                                RichText::new(file_name(path))
-                                                                    .size(10.0)
-                                                                    .strong()
-                                                                    .color(INK),
-                                                            )
-                                                            .truncate(),
-                                                        );
-                                                        ui.label(
-                                                            RichText::new(attachment_metadata(
-                                                                path,
-                                                            ))
-                                                            .size(8.0)
-                                                            .color(MUTED),
-                                                        );
-                                                    });
+                                                    let text_width =
+                                                        (ui.available_width() - 44.0).max(60.0);
+                                                    ui.allocate_ui_with_layout(
+                                                        Vec2::new(text_width, 30.0),
+                                                        Layout::top_down(Align::Min),
+                                                        |ui| {
+                                                            ui.add_sized(
+                                                                Vec2::new(
+                                                                    ui.available_width(),
+                                                                    15.0,
+                                                                ),
+                                                                egui::Label::new(
+                                                                    RichText::new(file_name(path))
+                                                                        .size(10.0)
+                                                                        .strong()
+                                                                        .color(INK),
+                                                                )
+                                                                .halign(Align::LEFT)
+                                                                .truncate(),
+                                                            );
+                                                            ui.label(
+                                                                RichText::new(attachment_metadata(
+                                                                    path,
+                                                                ))
+                                                                .size(8.0)
+                                                                .color(MUTED),
+                                                            );
+                                                        },
+                                                    );
                                                     let download = ui.add_sized(
                                                         Vec2::splat(28.0),
-                                                        egui::Button::new("↓")
+                                                        egui::Button::new("")
                                                             .fill(ORANGE_PALE)
                                                             .stroke(Stroke::NONE)
                                                             .corner_radius(7.0),
+                                                    );
+                                                    icons::paint_in_rect(
+                                                        ui,
+                                                        &self.icons,
+                                                        Icon::ChevronRight,
+                                                        Rect::from_center_size(
+                                                            download.rect.center(),
+                                                            Vec2::splat(14.0),
+                                                        ),
+                                                        ORANGE,
                                                     );
                                                     if download
                                                         .on_hover_text("Abrir documento")
