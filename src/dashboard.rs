@@ -1188,14 +1188,14 @@ impl DashboardApp {
                         } else {
                             self.update_notice_expanded = false;
                         }
-                        if !update_pending && self.section == Section::Reservas {
+                        if !update_pending && !launcher {
                             profile_response.clone().on_hover_text("Abrir menu");
                         }
                         if update_pending {
                             if profile_response.clicked() {
                                 self.update_prompt_open = true;
                             }
-                        } else if self.section == Section::Reservas {
+                        } else if !launcher {
                             if profile_response.clicked() {
                                 if !egui::Popup::is_id_open(&ctx, egui::Id::new("profile-functions-menu")) {
                                     self.profile_menu_backdrop_texture =
@@ -1217,6 +1217,7 @@ impl DashboardApp {
                             }
                             let backdrop_texture = self.profile_menu_backdrop_texture.clone();
                             let has_blurred_backdrop = backdrop_texture.is_some();
+                            let section_before_menu = self.section;
                             egui::Popup::menu(&profile_response)
                                 .id(egui::Id::new("profile-functions-menu"))
                                 .align(egui::RectAlign::BOTTOM)
@@ -1296,7 +1297,7 @@ impl DashboardApp {
                                         });
                                 });
                             let profile_menu_id = egui::Id::new("profile-functions-menu");
-                            if self.section != Section::Reservas
+                            if self.section != section_before_menu
                                 && egui::Popup::is_id_open(&ctx, profile_menu_id)
                             {
                                 egui::Popup::close_id(&ctx, profile_menu_id);
@@ -2140,7 +2141,7 @@ impl DashboardApp {
                 // Reserve room for the four summary cards so the calendar can't push them
                 // below the visible area. Shrink day cells on shorter windows.
                 let (min_calendar_height, max_calendar_height, min_cell_height, max_cell_height) =
-                    if self.preferences.compact_calendar { (282.0, 434.0, 34.0, 58.0) } else { (328.0, 510.0, 42.0, 72.0) };
+                    if self.preferences.compact_calendar { (282.0, 454.0, 34.0, 62.0) } else { (328.0, 530.0, 42.0, 76.0) };
                 let calendar_height = (ui.available_height() - 76.0).clamp(min_calendar_height, max_calendar_height);
                 let calendar_cell_height = ((calendar_height - 78.0) / 6.0).clamp(min_cell_height, max_cell_height);
                 let month_prefix = format!("{:04}-{:02}-", self.year, self.month);
@@ -2193,7 +2194,7 @@ impl DashboardApp {
                         ui.set_width(calendar_width);
                         ui.spacing_mut().item_spacing.y = 0.0;
                         self.calendar_panel(ui, calendar_cell_height);
-                        ui.add_space(34.0);
+                        ui.add_space(42.0);
                         let card_gap = 5.0;
                         let card_width = ((calendar_width - card_gap * 3.0) / 4.0).max(80.0);
                         ui.allocate_ui_with_layout(
@@ -3277,6 +3278,7 @@ impl DashboardApp {
                         } else {
                             egui::ScrollArea::vertical()
                                 .max_height(218.0)
+                                .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
                                 .show(ui, |ui| {
                                     for (index, path) in item.attachments.iter().enumerate() {
                                         Frame::new()
