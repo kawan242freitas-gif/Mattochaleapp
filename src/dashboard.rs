@@ -2887,6 +2887,7 @@ impl DashboardApp {
                                         style.visuals.widgets.active.bg_fill =
                                             Color32::from_rgb(91, 54, 29);
                                     }))
+                                    .frame(Frame::NONE)
                                     .show(|popup_ui| {
                                         popup_ui.set_min_width(status_response.rect.width());
                                         if let Some(texture) = &status_backdrop {
@@ -3082,32 +3083,27 @@ impl DashboardApp {
                                                     );
                                                     let text_width =
                                                         (ui.available_width() - 44.0).max(60.0);
-                                                    ui.allocate_ui_with_layout(
-                                                        Vec2::new(text_width, 30.0),
-                                                        Layout::top_down(Align::Min),
-                                                        |ui| {
-                                                            ui.add_sized(
-                                                                Vec2::new(
-                                                                    ui.available_width(),
-                                                                    15.0,
-                                                                ),
-                                                                egui::Label::new(
-                                                                    RichText::new(file_name(path))
-                                                                        .size(10.0)
-                                                                        .strong()
-                                                                        .color(INK),
-                                                                )
-                                                                .halign(Align::LEFT)
-                                                                .truncate(),
-                                                            );
-                                                            ui.label(
-                                                                RichText::new(attachment_metadata(
-                                                                    path,
-                                                                ))
-                                                                .size(8.0)
-                                                                .color(MUTED),
-                                                            );
-                                                        },
+                                                    let text_rect = ui
+                                                        .allocate_exact_size(
+                                                            Vec2::new(text_width, 30.0),
+                                                            Sense::hover(),
+                                                        )
+                                                        .0;
+                                                    let text_painter =
+                                                        ui.painter().with_clip_rect(text_rect);
+                                                    text_painter.text(
+                                                        text_rect.left_top() + Vec2::new(0.0, 8.0),
+                                                        Align2::LEFT_CENTER,
+                                                        file_name(path),
+                                                        FontId::proportional(10.0),
+                                                        INK,
+                                                    );
+                                                    text_painter.text(
+                                                        text_rect.left_top() + Vec2::new(0.0, 22.0),
+                                                        Align2::LEFT_CENTER,
+                                                        attachment_metadata(path),
+                                                        FontId::proportional(8.0),
+                                                        MUTED,
                                                     );
                                                     let download = ui.add_sized(
                                                         Vec2::splat(28.0),
@@ -5559,7 +5555,8 @@ fn reservation_wheel_column(
     ui.push_id(id, |ui| {
         ui.vertical(|ui| {
             ui.label(RichText::new(title).size(8.0).strong().color(MUTED));
-            let (rect, response) = ui.allocate_exact_size(Vec2::new(width, 108.0), Sense::click());
+            // Keep only the selected value visible; the mouse wheel changes it in place.
+            let (rect, response) = ui.allocate_exact_size(Vec2::new(width, 32.0), Sense::click());
             let scroll = if response.hovered() {
                 ui.input(|input| input.smooth_scroll_delta.y)
             } else {
@@ -5588,30 +5585,20 @@ fn reservation_wheel_column(
             }
 
             let painter = ui.painter().with_clip_rect(rect);
-            let selected = Rect::from_center_size(rect.center(), Vec2::new(rect.width(), 27.0));
-            painter.rect_filled(selected, 6.0, Color32::from_rgb(73, 42, 25));
+            painter.rect_filled(rect, 6.0, Color32::from_rgb(73, 42, 25));
             painter.rect_stroke(
-                selected,
+                rect,
                 6.0,
                 Stroke::new(1.0, ORANGE),
                 egui::StrokeKind::Inside,
             );
-            for offset in -2..=2 {
-                let item = reservation_wheel_step(*value, offset, min, max, wraps);
-                let y = rect.center().y + offset as f32 * 25.0;
-                let color = match offset {
-                    0 => INK,
-                    -1 | 1 => MUTED,
-                    _ => Color32::from_rgba_unmultiplied(190, 160, 126, 105),
-                };
-                painter.text(
-                    Pos2::new(rect.center().x, y),
-                    Align2::CENTER_CENTER,
-                    format_value(item),
-                    FontId::proportional(if offset == 0 { 16.0 } else { 13.0 }),
-                    color,
-                );
-            }
+            painter.text(
+                rect.center(),
+                Align2::CENTER_CENTER,
+                format_value(*value),
+                FontId::proportional(15.0),
+                INK,
+            );
         });
     });
 }
