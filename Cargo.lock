@@ -1890,12 +1890,13 @@ checksum = "5d15f86d12da44cd8d4ec3c73984537eb7f4cadcb9776a575a0a8a05ca11005c"
 
 [[package]]
 name = "matto-chales-desktop"
-version = "0.1.75"
+version = "0.1.76"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
  "directories",
  "eframe",
+ "flate2",
  "image",
  "open",
  "reqwest",

@@ -1,7 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     fs,
-    io::Cursor,
+    io::{Cursor, Read},
     path::PathBuf,
     sync::mpsc::{self, Receiver, Sender},
     thread,
@@ -9,6 +9,7 @@ use std::{
 };
 
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
+use flate2::read::GzDecoder;
 use eframe::egui::{
     self, Align, Align2, Color32, FontId, Frame, Layout, Margin, Pos2, Rect, RichText, Sense,
     Stroke, TextureHandle, Vec2,
@@ -129,6 +130,7 @@ struct ReservationRecord {
     restrictions: String,
     notes: String,
     attachments: Vec<String>,
+    attachment_names: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default, serde::Deserialize, serde::Serialize)]
@@ -175,6 +177,14 @@ struct ApplicationBackup {
 }
 
 #[derive(Default)]
+struct BackupImportPlan {
+    preferences: Option<AppPreferences>,
+    business_data: BusinessData,
+    blocked_dates: HashSet<String>,
+    chalet_names: Vec<String>,
+}
+
+#[derive(Default)]
 struct ReservationForm {
     responsible: String,
     chalet: String,
@@ -190,6 +200,7 @@ struct ReservationForm {
     restrictions: String,
     notes: String,
     attachments: Vec<String>,
+    attachment_names: Vec<String>,
 }
 
 #[derive(Default)]
@@ -2623,6 +2634,7 @@ impl DashboardApp {
                 restrictions: item.restrictions.clone(),
                 notes: item.notes.clone(),
                 attachments: item.attachments.clone(),
+                attachment_names: item.attachment_names.clone(),
             }
         } else {
             ReservationForm {
@@ -2794,11 +2806,11 @@ impl DashboardApp {
                         .clicked()
                     {
                         if let Some(paths) = rfd::FileDialog::new().pick_files() {
-                            self.reservation_form.attachments.extend(
-                                paths
-                                    .into_iter()
-                                    .map(|path| path.to_string_lossy().to_string()),
-                            );
+                            for path in paths {
+                                let display_name = path.file_name().and_then(|name| name.to_str()).unwrap_or("arquivo").to_owned();
+                                self.reservation_form.attachments.push(path.to_string_lossy().to_string());
+                                self.reservation_form.attachment_names.push(display_name);
+                            }
                         }
                     }
                     ui.label(
@@ -2810,8 +2822,9 @@ impl DashboardApp {
                         .color(MUTED),
                     );
                 });
-                for path in &self.reservation_form.attachments {
-                    ui.label(RichText::new(file_name(path)).size(9.0).color(MUTED));
+                for (index, path) in self.reservation_form.attachments.iter().enumerate() {
+                    let name = self.reservation_form.attachment_names.get(index).map(String::as_str).unwrap_or_else(|| file_name(path));
+                    ui.label(RichText::new(name).size(9.0).color(MUTED));
                 }
                 if let Some(error) = &self.notice {
                     ui.label(RichText::new(error).size(10.0).color(RED));
@@ -3263,7 +3276,7 @@ impl DashboardApp {
                                                     text_painter.text(
                                                         text_rect.left_top() + Vec2::new(0.0, 8.0),
                                                         Align2::LEFT_CENTER,
-                                                        file_name(path),
+                                                        item.attachment_names.get(index).map(String::as_str).unwrap_or_else(|| file_name(path)),
                                                         FontId::proportional(10.0),
                                                         INK,
                                                     );
@@ -3442,6 +3455,7 @@ impl DashboardApp {
             restrictions: form.restrictions.trim().to_owned(),
             notes: form.notes.trim().to_owned(),
             attachments: form.attachments.clone(),
+            attachment_names: form.attachment_names.clone(),
         };
         if let Some(existing) = self
             .business_data
@@ -4795,11 +4809,14 @@ impl DashboardApp {
                 if ui.add(egui::Button::new("Exportar backup JSON").fill(GREEN).stroke(Stroke::new(1.0, GREEN_MID)).corner_radius(10.0)).clicked() {
                     self.export_application_backup();
                 }
+                if ui.add(egui::Button::new("Importar backup").fill(SURFACE).stroke(Stroke::new(1.0, LINE)).corner_radius(10.0)).clicked() {
+                    self.import_application_backup();
+                }
                 if ui.add(egui::Button::new("Abrir pasta de dados").fill(SURFACE).stroke(Stroke::new(1.0, LINE)).corner_radius(10.0)).clicked() {
                     if let Some(path) = self.business_path.as_ref().or(self.preferences_path.as_ref()).and_then(|path| path.parent()) { let _ = open::that(path); }
                 }
             });
-            ui.label(RichText::new("Os anexos de reserva continuam em seus caminhos originais e não são copiados para o backup.").size(10.0).color(MUTED));
+            ui.label(RichText::new("Importe backups JSON do app ou arquivos .json.gz do Refúgio. Os dados serão mesclados localmente; o banco do site não será alterado.").size(10.0).color(MUTED));
             let preferences_path = self.preferences_path.as_ref().map(|path| path.display().to_string()).unwrap_or_else(|| "Indisponível".to_owned());
             ui.label(RichText::new(format!("Preferências: {preferences_path}")).size(9.5).color(MUTED));
         });
@@ -4828,6 +4845,53 @@ impl DashboardApp {
             Ok(()) => self.settings_notice = Some("Backup exportado com sucesso.".to_owned()),
             Err(error) => self.settings_notice = Some(format!("Não foi possível exportar o backup: {error}")),
         }
+    }
+
+    fn import_application_backup(&mut self) {
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("Backup JSON ou GZIP", &["json", "gz"])
+            .pick_file()
+        else { return; };
+        let result = read_backup_file(&path).and_then(parse_backup_import);
+        let plan = match result {
+            Ok(plan) => plan,
+            Err(error) => {
+                self.settings_notice = Some(format!("Não foi possível importar o backup: {error}"));
+                return;
+            }
+        };
+
+        // Merge incoming data without deleting any local records. This import path
+        // intentionally only writes local cache files and never calls remote sync.
+        let mut merged = self.business_data.clone();
+        merge_by_id(&mut merged.reservations, plan.business_data.reservations);
+        merge_by_id(&mut merged.movements, plan.business_data.movements);
+        merge_by_id(&mut merged.payables, plan.business_data.payables);
+        self.business_data = merged;
+        self.blocked_dates.extend(plan.blocked_dates);
+        if let Some(mut preferences) = plan.preferences {
+            let existing_names = self.preferences.chalet_names.clone();
+            for name in existing_names.into_iter().chain(plan.chalet_names) {
+                push_unique_name(&mut preferences.chalet_names, name);
+            }
+            self.preferences = preferences;
+        } else {
+            for name in plan.chalet_names {
+                push_unique_name(&mut self.preferences.chalet_names, name);
+            }
+        }
+
+        let mut errors = Vec::new();
+        if let Err(error) = self.persist_business_data_locally() { errors.push(format!("dados: {error}")); }
+        if let Err(error) = write_preferences_locally(&self.preferences_path, &self.preferences) { errors.push(format!("preferências: {error}")); }
+        if let Err(error) = write_availability_locally(&self.availability_path, &self.blocked_dates) { errors.push(format!("disponibilidade: {error}")); }
+        self.saved_preferences = self.preferences.clone();
+        let count = self.business_data.reservations.len();
+        self.settings_notice = Some(if errors.is_empty() {
+            format!("Backup importado. {} reservas, {} movimentações e {} contas disponíveis neste app. Banco do site não alterado.", count, self.business_data.movements.len(), self.business_data.payables.len())
+        } else {
+            format!("Dados importados para a sessão, mas houve falha ao gravar {}. Banco do site não alterado.", errors.join("; "))
+        });
     }
 
     fn save_preferences(&mut self) {
@@ -6889,6 +6953,129 @@ fn parse_brl_cents(value: &str) -> Option<u64> {
         _ => fraction[..2].parse::<u64>().ok()?,
     };
     reais.checked_mul(100)?.checked_add(centavos)
+}
+
+fn read_backup_file(path: &std::path::Path) -> Result<Vec<u8>, String> {
+    const MAX_BACKUP_BYTES: u64 = 100 * 1024 * 1024;
+    let file = fs::File::open(path).map_err(|error| error.to_string())?;
+    if file.metadata().map_err(|error| error.to_string())?.len() > MAX_BACKUP_BYTES {
+        return Err("o arquivo ultrapassa o limite de 100 MB".to_owned());
+    }
+    let mut bytes = Vec::new();
+    if path.extension().and_then(|value| value.to_str()) == Some("gz") {
+        GzDecoder::new(file).take(MAX_BACKUP_BYTES + 1).read_to_end(&mut bytes).map_err(|error| format!("GZIP inválido: {error}"))?;
+    } else {
+        let file = file;
+        file.take(MAX_BACKUP_BYTES + 1).read_to_end(&mut bytes).map_err(|error| error.to_string())?;
+    }
+    if bytes.len() as u64 > MAX_BACKUP_BYTES { return Err("o backup descompactado ultrapassa o limite de 100 MB".to_owned()); }
+    Ok(bytes)
+}
+
+fn parse_backup_import(bytes: Vec<u8>) -> Result<BackupImportPlan, String> {
+    let value: serde_json::Value = serde_json::from_slice(&bytes).map_err(|error| format!("JSON inválido: {error}"))?;
+    if value.get("preferences").is_some() && value.get("business_data").is_some() {
+        let backup = serde_json::from_value::<ApplicationBackup>(value).map_err(|error| format!("backup do app inválido: {error}"))?;
+        return Ok(BackupImportPlan { preferences: Some(backup.preferences), business_data: backup.business_data, blocked_dates: backup.blocked_dates, chalet_names: Vec::new() });
+    }
+
+    let root = value.get("data").unwrap_or(&value);
+    let app_state = root.get("appState").unwrap_or(root);
+    let cabins = app_state.get("cabins").and_then(serde_json::Value::as_array).cloned().unwrap_or_default();
+    let cabin_names: HashMap<String, String> = cabins.iter().filter_map(|cabin| {
+        Some((json_string(cabin, &["id"] )?, json_string(cabin, &["name"])?))
+    }).collect();
+    let chalet_names: Vec<String> = cabins.iter().filter_map(|cabin| json_string(cabin, &["name"])).collect();
+    let mut plan = BackupImportPlan { chalet_names, ..BackupImportPlan::default() };
+    if let Some(bookings) = app_state.get("bookings").and_then(serde_json::Value::as_array) {
+        for item in bookings {
+            let cabin_id = json_string(item, &["cabinId", "cabin_id"]).unwrap_or_default();
+            let documents = item.get("documents").and_then(serde_json::Value::as_array).cloned().unwrap_or_default();
+            let attachments: Vec<String> = documents.iter().filter_map(|document| json_string(document, &["url", "pathname", "path"])).collect();
+            let attachment_names: Vec<String> = documents.iter().map(|document| json_string(document, &["name", "filename"]).unwrap_or_else(|| "Arquivo anexado".to_owned())).collect();
+            let status = json_string(item, &["status"]).unwrap_or_default();
+            plan.business_data.reservations.push(ReservationRecord {
+                id: json_string(item, &["id"]).unwrap_or_else(new_record_id),
+                responsible: json_string(item, &["guestName", "responsible", "guest_name"]).unwrap_or_default(),
+                chalet: json_string(item, &["cabinName", "chalet"]).or_else(|| cabin_names.get(&cabin_id).cloned()).unwrap_or(cabin_id),
+                guests: json_u32(item, &["people", "guests"]).unwrap_or(1),
+                check_in: json_string(item, &["start", "check_in", "checkIn"]).unwrap_or_default(),
+                check_out: json_string(item, &["end", "check_out", "checkOut"]).unwrap_or_default(),
+                check_in_time: json_string(item, &["checkIn", "check_in_time", "checkInTime"]).unwrap_or_else(|| "14:00".to_owned()),
+                check_out_time: json_string(item, &["checkOut", "check_out_time", "checkOutTime"]).unwrap_or_else(|| "11:00".to_owned()),
+                pets: json_bool(item, &["pets"]), breakfast: json_bool(item, &["breakfast"]),
+                decoration: json_bool(item, &["decoration"]), reserved: !status.eq_ignore_ascii_case("rascunho") && !status.eq_ignore_ascii_case("draft"),
+                restrictions: json_string(item, &["intolerance", "restrictions"]).unwrap_or_default(),
+                notes: json_string(item, &["notes", "observations"]).unwrap_or_default(), attachments, attachment_names,
+            });
+        }
+    }
+    if let Some(entries) = app_state.get("financeEntries").or_else(|| app_state.get("movements")).and_then(serde_json::Value::as_array) {
+        for item in entries {
+            let cents = json_u64(item, &["amount_cents", "amountCents"]).or_else(|| json_string(item, &["amount", "value"]).and_then(|s| parse_brl_cents(&s))).unwrap_or(0);
+            plan.business_data.movements.push(FinancialMovement {
+                id: json_string(item, &["id"]).unwrap_or_else(new_record_id), kind: json_string(item, &["kind", "type"]).unwrap_or_default(),
+                description: json_string(item, &["description", "title"]).unwrap_or_default(), amount_cents: cents,
+                date: json_string(item, &["date"]).unwrap_or_default(), payment_method: json_string(item, &["paymentMethod", "payment_method"]).unwrap_or_default(),
+                category: json_string(item, &["category"]).unwrap_or_default(), notes: json_string(item, &["notes", "observations"]).unwrap_or_default(),
+            });
+        }
+    }
+    if let Some(entries) = app_state.get("payables").or_else(|| app_state.get("accountsPayable")).and_then(serde_json::Value::as_array) {
+        for item in entries {
+            let cents = json_u64(item, &["amount_cents", "amountCents"]).or_else(|| json_string(item, &["amount", "value"]).and_then(|s| parse_brl_cents(&s))).unwrap_or(0);
+            plan.business_data.payables.push(PayableAccount {
+                id: json_string(item, &["id"]).unwrap_or_else(new_record_id), description: json_string(item, &["description", "title"]).unwrap_or_default(),
+                supplier: json_string(item, &["supplier", "vendor"]).unwrap_or_default(), amount_cents: cents,
+                due_date: json_string(item, &["dueDate", "due_date"]).unwrap_or_default(), category: json_string(item, &["category"]).unwrap_or_default(),
+                installments: json_string(item, &["installments"]).unwrap_or_default(), paid: json_bool(item, &["paid"]), notes: json_string(item, &["notes"]).unwrap_or_default(),
+            });
+        }
+    }
+    if let Some(dates) = app_state.get("blocked_dates").or_else(|| app_state.get("blockedDates")).and_then(serde_json::Value::as_array) {
+        plan.blocked_dates.extend(dates.iter().filter_map(serde_json::Value::as_str).map(str::to_owned));
+    }
+    if plan.business_data.reservations.is_empty() && plan.business_data.movements.is_empty()
+        && plan.business_data.payables.is_empty() && plan.chalet_names.is_empty() && plan.blocked_dates.is_empty() {
+        return Err("formato de backup não reconhecido".to_owned());
+    }
+    Ok(plan)
+}
+
+fn json_string(value: &serde_json::Value, keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|key| value.get(*key).and_then(serde_json::Value::as_str).map(str::to_owned))
+}
+fn json_u64(value: &serde_json::Value, keys: &[&str]) -> Option<u64> {
+    keys.iter().find_map(|key| value.get(*key).and_then(|v| v.as_u64().or_else(|| v.as_f64().filter(|n| *n >= 0.0).map(|n| n.round() as u64))))
+}
+fn json_u32(value: &serde_json::Value, keys: &[&str]) -> Option<u32> { json_u64(value, keys).and_then(|n| u32::try_from(n).ok()) }
+fn json_bool(value: &serde_json::Value, keys: &[&str]) -> bool { keys.iter().any(|key| value.get(*key).and_then(serde_json::Value::as_bool).unwrap_or(false)) }
+fn push_unique_name(names: &mut Vec<String>, name: String) {
+    if !name.trim().is_empty() && !names.iter().any(|existing| existing.eq_ignore_ascii_case(&name)) && names.len() < 20 { names.push(name); }
+}
+fn merge_by_id<T>(current: &mut Vec<T>, incoming: Vec<T>) where T: serde::Serialize + for<'de> serde::Deserialize<'de> {
+    // All persisted records use string IDs; serialization here avoids imposing a
+    // second trait on each model solely for the generic merge operation.
+    for item in incoming {
+        let value = serde_json::to_value(item).expect("serializable backup record");
+        let id = value.get("id").and_then(serde_json::Value::as_str).unwrap_or_default();
+        if let Some(index) = current.iter().position(|existing| serde_json::to_value(existing).ok().and_then(|v| v.get("id").and_then(serde_json::Value::as_str).map(str::to_owned)).as_deref() == Some(id)) {
+            current[index] = serde_json::from_value(value).expect("record roundtrips through JSON");
+        } else {
+            current.push(serde_json::from_value(value).expect("record roundtrips through JSON"));
+        }
+    }
+}
+fn write_preferences_locally(path: &Option<PathBuf>, preferences: &AppPreferences) -> Result<(), String> {
+    let path = path.as_ref().ok_or_else(|| "pasta de preferências indisponível".to_owned())?;
+    if let Some(parent) = path.parent() { fs::create_dir_all(parent).map_err(|error| error.to_string())?; }
+    fs::write(path, serde_json::to_vec_pretty(preferences).map_err(|error| error.to_string())?).map_err(|error| error.to_string())
+}
+fn write_availability_locally(path: &Option<PathBuf>, dates: &HashSet<String>) -> Result<(), String> {
+    let path = path.as_ref().ok_or_else(|| "arquivo de disponibilidade indisponível".to_owned())?;
+    if let Some(parent) = path.parent() { fs::create_dir_all(parent).map_err(|error| error.to_string())?; }
+    let mut dates: Vec<_> = dates.iter().cloned().collect(); dates.sort();
+    fs::write(path, dates.join("\n")).map_err(|error| error.to_string())
 }
 
 fn format_brl(cents: u64) -> String {

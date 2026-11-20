@@ -1,6 +1,6 @@
 [package]
 name = "matto-chales-desktop"
-version = "0.1.75"
+version = "0.1.76"
 edition = "2024"
 description = "Aplicativo desktop nativo da Matto Chalés"
 
@@ -9,6 +9,7 @@ anyhow = "1"
 base64 = "0.22"
 directories = "6"
 eframe = { version = "0.37", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
+flate2 = "1"
 image = { version = "0.25", default-features = false, features = ["gif", "jpeg", "png", "webp"] }
 open = "5"
 reqwest = { version = "0.12", features = ["json", "multipart", "blocking"] }
