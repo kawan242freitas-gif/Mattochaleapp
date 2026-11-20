@@ -595,14 +595,35 @@ impl DashboardApp {
                                 }
                             }
                             self.business_data = remote;
-                            self.persist_business_data();
-                            self.notice = Some("Reservas e financeiro sincronizados com o banco do site.".to_owned());
+                            let imported_counts = (
+                                self.business_data.reservations.len(),
+                                self.business_data.movements.len(),
+                                self.business_data.payables.len(),
+                            );
+                            let cache_result = self.persist_business_data_locally();
+                            self.settings_notice = Some(match cache_result {
+                                Ok(()) => format!(
+                                    "Importação concluída: {} reservas, {} movimentações e {} contas a pagar disponíveis no app. O banco do site não foi alterado.",
+                                    imported_counts.0, imported_counts.1, imported_counts.2
+                                ),
+                                Err(error) => format!(
+                                    "Dados importados para esta sessão, mas não foi possível salvar o cache local: {error}"
+                                ),
+                            });
                         }
-                        Err(error) => self.notice = Some(format!("Os dados do site vieram em formato inválido: {error}")),
+                        Err(error) => {
+                            self.notice = Some(format!("Os dados do site vieram em formato inválido: {error}"));
+                            self.settings_notice = Some(format!(
+                                "O banco não foi alterado; os dados locais foram preservados. Não foi possível importar os dados: {error}"
+                            ));
+                        }
                     }
                 }
                 Event::BusinessDataLoaded(Err(error)) => {
                     self.notice = Some(format!("Não foi possível carregar os dados do site; os dados locais foram mantidos. {error}"));
+                    self.settings_notice = Some(format!(
+                        "A importação não foi concluída; os dados deste dispositivo foram preservados e o banco não foi alterado. {error}"
+                    ));
                 }
                 Event::BusinessDataSynced(Ok(())) => {}
                 Event::BusinessDataSynced(Err(error)) => {
@@ -3848,23 +3869,22 @@ impl DashboardApp {
         self.persist_business_data();
     }
 
+    fn persist_business_data_locally(&self) -> Result<(), String> {
+        let path = self
+            .business_path
+            .as_ref()
+            .ok_or_else(|| "Não foi possível localizar a pasta de dados do aplicativo.".to_owned())?;
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        }
+        let bytes = serde_json::to_vec_pretty(&self.business_data)
+            .map_err(|error| error.to_string())?;
+        fs::write(path, bytes).map_err(|error| error.to_string())
+    }
+
     fn persist_business_data(&mut self) {
-        if let Some(path) = &self.business_path {
-            if let Some(parent) = path.parent() {
-                let _ = fs::create_dir_all(parent);
-            }
-            match serde_json::to_vec_pretty(&self.business_data)
-                .and_then(|bytes| fs::write(path, bytes).map_err(serde_json::Error::io))
-            {
-                Ok(()) => {}
-                Err(_) => {
-                    self.notice =
-                        Some("Não foi possível gravar os dados neste computador.".to_owned())
-                }
-            }
-        } else {
-            self.notice =
-                Some("Não foi possível localizar a pasta de dados do aplicativo.".to_owned());
+        if let Err(error) = self.persist_business_data_locally() {
+            self.notice = Some(format!("Não foi possível gravar os dados neste computador: {error}"));
         }
         self.sync_business_data();
     }
@@ -4752,7 +4772,7 @@ impl DashboardApp {
             settings_status(ui, "Estado da conexão", if self.admin_unlocked { "Conectado e sincronizando" } else { "Desconectado · dados locais preservados" });
             if self.admin_unlocked {
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("As alterações são enviadas ao banco enquanto a sessão estiver conectada.").size(10.5).color(MUTED));
+                    ui.label(RichText::new("Ao conectar, os dados do banco são importados para o app sem apagar ou alterar registros remotos. Edições feitas depois no app continuam sincronizadas.").size(10.5).color(MUTED));
                     if ui.add(egui::Button::new("Desconectar").fill(SURFACE).stroke(Stroke::new(1.0, LINE)).corner_radius(9.0)).clicked() {
                         self.admin_unlocked = false;
                         self.admin_token.clear();
