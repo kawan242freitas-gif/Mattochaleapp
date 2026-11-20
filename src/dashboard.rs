@@ -48,6 +48,7 @@ enum Section {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum SettingsPage {
     #[default]
+    Overview,
     Loja,
     Chales,
     Catalogo,
@@ -55,7 +56,7 @@ enum SettingsPage {
     Dados,
 }
 
-#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(default)]
 struct AppPreferences {
     store_name: String,
@@ -163,6 +164,14 @@ struct BusinessData {
     reservations: Vec<ReservationRecord>,
     movements: Vec<FinancialMovement>,
     payables: Vec<PayableAccount>,
+}
+
+#[derive(Clone, Debug, Default, serde::Deserialize, serde::Serialize)]
+#[serde(default)]
+struct ApplicationBackup {
+    preferences: AppPreferences,
+    business_data: BusinessData,
+    blocked_dates: HashSet<String>,
 }
 
 #[derive(Default)]
@@ -291,6 +300,7 @@ pub struct DashboardApp {
     maximized: bool,
     availability_path: Option<PathBuf>,
     preferences: AppPreferences,
+    saved_preferences: AppPreferences,
     preferences_path: Option<PathBuf>,
     profile_name: String,
     profile_frames: Vec<ProfileFrame>,
@@ -316,6 +326,7 @@ pub struct DashboardApp {
     update_message: Option<String>,
     update_prompt_open: bool,
     update_auto_install_at: Option<Instant>,
+    update_notice_expanded: bool,
     downloaded_update: Option<(PathBuf, String)>,
     update_install_when_downloaded: bool,
     next_update_check: Instant,
@@ -329,6 +340,7 @@ impl DashboardApp {
         let (blocked_dates, availability_path) = load_availability();
         let (business_data, business_path) = load_business_data();
         let (preferences, preferences_path) = load_preferences();
+        let saved_preferences = preferences.clone();
         let (profile_name, profile_frames) = load_user_profile(&cc.egui_ctx);
         let next_profile_frame = Instant::now()
             + profile_frames
@@ -435,6 +447,7 @@ impl DashboardApp {
             maximized: true,
             availability_path,
             preferences,
+            saved_preferences,
             preferences_path,
             profile_name,
             profile_frames,
@@ -442,7 +455,7 @@ impl DashboardApp {
             next_profile_frame,
             splash_frames,
             splash_started_at: Some(Instant::now()),
-            settings_page: SettingsPage::Loja,
+            settings_page: SettingsPage::Overview,
             settings_notice: None,
             admin_token: String::new(),
             admin_unlocked: false,
@@ -460,6 +473,7 @@ impl DashboardApp {
             update_message: None,
             update_prompt_open: false,
             update_auto_install_at: None,
+            update_notice_expanded: false,
             downloaded_update: None,
             update_install_when_downloaded: true,
             next_update_check: Instant::now() + Duration::from_secs(300),
@@ -807,36 +821,6 @@ impl DashboardApp {
         self.update_prompt_open = open && !close_prompt;
     }
 
-    fn show_update_notice(&self, ctx: &egui::Context) {
-        let Some(install_at) = self.update_auto_install_at else {
-            return;
-        };
-        let remaining = install_at.saturating_duration_since(Instant::now());
-        egui::Area::new(egui::Id::new("scheduled-update-notice"))
-            .anchor(Align2::RIGHT_TOP, Vec2::new(-18.0, 70.0))
-            .order(egui::Order::Foreground)
-            .show(ctx, |ui| {
-                Frame::new()
-                    .fill(Color32::from_rgb(49, 31, 20))
-                    .stroke(Stroke::new(1.0, Color32::from_rgb(147, 80, 39)))
-                    .corner_radius(9.0)
-                    .inner_margin(Margin::symmetric(12, 8))
-                    .show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            ui.label(RichText::new("Atualização agendada").strong().color(INK));
-                            ui.label(
-                                RichText::new(format!(
-                                    "Instalação em {}",
-                                    format_countdown(remaining)
-                                ))
-                                .color(MUTED),
-                            );
-                        });
-                    });
-            });
-        ctx.request_repaint_after(Duration::from_secs(1));
-    }
-
     fn update_indicator(&self, ctx: &egui::Context) -> (Color32, f32) {
         let phase = ctx.input(|input| input.time);
         let pulse = ((phase * 3.8).sin() * 0.5 + 0.5) as f32;
@@ -1045,9 +1029,30 @@ impl DashboardApp {
                                 .x
                         });
                         let profile_width = (name_width + 84.0).clamp(120.0, 260.0);
-                        let capsule = Rect::from_center_size(
+                        let base_capsule = Rect::from_center_size(
                             Pos2::new(rect.center().x, rect.center().y),
                             Vec2::new(profile_width, 38.0),
+                        );
+                        let expanded_capsule = Rect::from_min_size(
+                            base_capsule.min,
+                            Vec2::new(profile_width + 280.0, 38.0),
+                        );
+                        let pointer = ctx.pointer_latest_pos();
+                        let was_expanded = self.update_notice_expanded;
+                        let pointer_over_pill = pointer.is_some_and(|position| {
+                            base_capsule.contains(position)
+                                || (was_expanded && expanded_capsule.contains(position))
+                        });
+                        self.update_notice_expanded = self.update_auto_install_at.is_some()
+                            && pointer_over_pill;
+                        let expansion = ctx.animate_value_with_time(
+                            ui.scope_id().with("scheduled-update-pill-expansion"),
+                            if self.update_notice_expanded { 1.0 } else { 0.0 },
+                            0.2,
+                        );
+                        let capsule = Rect::from_min_size(
+                            base_capsule.min,
+                            Vec2::new(profile_width + 280.0 * expansion, 38.0),
                         );
                         let painter = ui.painter().clone();
                         painter.rect_filled(capsule, 22.0, Color32::from_rgb(38, 24, 16));
@@ -1132,11 +1137,28 @@ impl DashboardApp {
                             ui.scope_id().with("profile-functions-menu-button"),
                             Sense::click(),
                         );
-                        profile_response.clone().on_hover_text(if update_pending {
-                            "Nova atualização disponível"
+                        if let Some(install_at) = self.update_auto_install_at {
+                            self.update_notice_expanded = profile_response.hovered()
+                                || (was_expanded
+                                    && pointer.is_some_and(|position| expanded_capsule.contains(position)));
+                            if self.update_notice_expanded {
+                                let remaining = install_at.saturating_duration_since(Instant::now());
+                                let text_color = MUTED.gamma_multiply(expansion.clamp(0.0, 1.0));
+                                painter.with_clip_rect(capsule).text(
+                                    Pos2::new(base_capsule.right() + 12.0, capsule.center().y),
+                                    Align2::LEFT_CENTER,
+                                    format!("Atualização agendada · Instalação em {}", format_countdown(remaining)),
+                                    FontId::proportional(12.0),
+                                    text_color,
+                                );
+                                ctx.request_repaint_after(Duration::from_secs(1));
+                            }
                         } else {
-                            "Abrir menu"
-                        });
+                            self.update_notice_expanded = false;
+                        }
+                        if !update_pending {
+                            profile_response.clone().on_hover_text("Abrir menu");
+                        }
                         if update_pending {
                             if profile_response.clicked() {
                                 self.update_prompt_open = true;
@@ -2073,8 +2095,10 @@ impl DashboardApp {
                 let calendar_width = (ui.available_width() - 342.0).max(520.0);
                 // Reserve room for the four summary cards so the calendar can't push them
                 // below the visible area. Shrink day cells on shorter windows.
-                let calendar_height = (ui.available_height() - 100.0).clamp(328.0, 486.0);
-                let calendar_cell_height = ((calendar_height - 78.0) / 6.0).clamp(42.0, 68.0);
+                let (min_calendar_height, max_calendar_height, min_cell_height, max_cell_height) =
+                    if self.preferences.compact_calendar { (282.0, 410.0, 34.0, 54.0) } else { (328.0, 486.0, 42.0, 68.0) };
+                let calendar_height = (ui.available_height() - 100.0).clamp(min_calendar_height, max_calendar_height);
+                let calendar_cell_height = ((calendar_height - 78.0) / 6.0).clamp(min_cell_height, max_cell_height);
                 let month_prefix = format!("{:04}-{:02}-", self.year, self.month);
                 let blocked = self
                     .blocked_dates
@@ -3834,34 +3858,30 @@ impl DashboardApp {
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                ui.add_space(18.0);
+                ui.add_space(10.0);
                 ui.horizontal(|ui| {
                     ui.vertical(|ui| {
+                        ui.label(RichText::new("CENTRAL DE CONTROLE").size(10.0).strong().color(ORANGE));
                         ui.label(
                             RichText::new("Configurações")
-                                .size(32.0)
+                                .size(29.0)
                                 .strong()
                                 .color(INK),
                         );
                         ui.label(
-                            RichText::new("Personalize a operação da Matto Chalés")
+                            RichText::new("Gerencie identidade, unidades, catálogo e dados do aplicativo.")
                                 .size(13.0)
                                 .color(MUTED),
                         );
                     });
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        let save = ui.add_sized(
-                            Vec2::new(178.0, 42.0),
-                            egui::Button::new(
-                                RichText::new("Salvar alterações")
-                                    .size(14.0)
-                                    .strong()
-                                    .color(Color32::WHITE),
-                            )
-                            .fill(GREEN)
-                            .stroke(Stroke::NONE)
-                            .corner_radius(21),
-                        );
+                        let dirty = self.preferences != self.saved_preferences;
+                        let save = ui.add_enabled(dirty, egui::Button::new(
+                            RichText::new("Salvar alterações").size(13.0).strong().color(Color32::WHITE),
+                        ).fill(if dirty { GREEN } else { SURFACE_ALT })
+                            .stroke(Stroke::new(1.0, if dirty { GREEN_MID } else { LINE }))
+                            .corner_radius(12.0));
+                        ui.label(RichText::new(if dirty { "Alterações pendentes" } else { "Tudo salvo" }).size(11.0).color(if dirty { ORANGE } else { MUTED }));
                         if save.clicked() {
                             self.save_preferences();
                         }
@@ -3876,10 +3896,10 @@ impl DashboardApp {
                         Layout::top_down(Align::Min),
                         |ui| {
                             Frame::new()
-                                .fill(SURFACE)
+                                .fill(SURFACE_ALT)
                                 .stroke(Stroke::new(1.0, LINE))
                                 .corner_radius(18)
-                                .inner_margin(Margin::symmetric(12, 12))
+                                .inner_margin(Margin::symmetric(10, 12))
                                 .show(ui, |ui| {
                                     ui.label(
                                         RichText::new("GERENCIAMENTO")
@@ -3890,16 +3910,22 @@ impl DashboardApp {
                                     ui.add_space(8.0);
                                     for (page, icon, label, description) in [
                                         (
+                                            SettingsPage::Overview,
+                                            Icon::Settings,
+                                            "Visão geral",
+                                            "Resumo e atalhos",
+                                        ),
+                                        (
                                             SettingsPage::Loja,
                                             Icon::House,
-                                            "Loja",
-                                            "Perfil e contato",
+                                            "Perfil da loja",
+                                            "Identidade e contato",
                                         ),
                                         (
                                             SettingsPage::Chales,
                                             Icon::BedDouble,
                                             "Chalés",
-                                            "Unidades e reservas",
+                                            "Unidades e calendário",
                                         ),
                                         (
                                             SettingsPage::Catalogo,
@@ -3909,15 +3935,15 @@ impl DashboardApp {
                                         ),
                                         (
                                             SettingsPage::Aparencia,
-                                            Icon::Settings,
+                                            Icon::BrushCleaning,
                                             "Aparência",
-                                            "Visual do aplicativo",
+                                            "Personalize a interface",
                                         ),
                                         (
                                             SettingsPage::Dados,
                                             Icon::Refresh,
                                             "Dados e conexão",
-                                            "Sincronização e arquivos",
+                                            "Sincronização e backup",
                                         ),
                                     ] {
                                         self.settings_nav_item(ui, page, icon, label, description);
@@ -3938,6 +3964,7 @@ impl DashboardApp {
                                 .inner_margin(Margin::symmetric(22, 18))
                                 .show(ui, |ui| {
                                     match self.settings_page {
+                                        SettingsPage::Overview => self.settings_overview(ui),
                                         SettingsPage::Loja => self.settings_store(ui),
                                         SettingsPage::Chales => self.settings_chalets(ui),
                                         SettingsPage::Catalogo => self.settings_catalog(ui, ctx),
@@ -3945,8 +3972,10 @@ impl DashboardApp {
                                         SettingsPage::Dados => self.settings_data(ui, ctx),
                                     }
                                     if let Some(notice) = &self.settings_notice {
-                                        ui.add_space(14.0);
-                                        ui.label(RichText::new(notice).size(12.0).color(GREEN));
+                                        ui.add_space(12.0);
+                                        Frame::new().fill(ORANGE_PALE).stroke(Stroke::new(1.0, LINE)).corner_radius(10.0).inner_margin(Margin::symmetric(12, 8)).show(ui, |ui| {
+                                            ui.label(RichText::new(notice).size(11.0).color(INK));
+                                        });
                                     }
                                 });
                         },
@@ -3965,7 +3994,7 @@ impl DashboardApp {
     ) {
         let selected = self.settings_page == page;
         let (rect, response) =
-            ui.allocate_exact_size(Vec2::new(ui.available_width(), 58.0), Sense::click());
+            ui.allocate_exact_size(Vec2::new(ui.available_width(), 56.0), Sense::click());
         if selected || response.hovered() {
             ui.painter().rect_filled(
                 rect,
@@ -3973,32 +4002,41 @@ impl DashboardApp {
                 if selected {
                     ORANGE_PALE
                 } else {
-                    Color32::from_rgba_unmultiplied(77, 49, 29, 150)
+                    Color32::from_rgba_unmultiplied(77, 49, 29, 120)
                 },
             );
         }
+        if selected {
+            ui.painter().rect_filled(
+                Rect::from_min_max(rect.left_top() + Vec2::new(1.0, 12.0), rect.left_bottom() - Vec2::new(0.0, 12.0)),
+                2.0,
+                ORANGE,
+            );
+        }
+        let icon_rect = Rect::from_center_size(
+            Pos2::new(rect.left() + 25.0, rect.center().y),
+            Vec2::splat(19.0),
+        );
+        ui.painter().rect_filled(icon_rect.expand(6.0), 8.0, if selected { SURFACE } else { SURFACE_ALT });
         icons::paint_in_rect(
             ui,
             &self.icons,
             icon,
-            Rect::from_center_size(
-                Pos2::new(rect.left() + 23.0, rect.center().y),
-                Vec2::splat(19.0),
-            ),
-            if selected { GREEN } else { MUTED },
+            icon_rect,
+            if selected { ORANGE } else { MUTED },
         );
         ui.painter().text(
             Pos2::new(rect.left() + 44.0, rect.center().y - 7.0),
             Align2::LEFT_CENTER,
             title,
-            FontId::proportional(13.0),
+            FontId::proportional(12.0),
             INK,
         );
         ui.painter().text(
             Pos2::new(rect.left() + 44.0, rect.center().y + 10.0),
             Align2::LEFT_CENTER,
             description,
-            FontId::proportional(10.0),
+            FontId::proportional(9.5),
             MUTED,
         );
         if response.clicked() {
@@ -4007,53 +4045,60 @@ impl DashboardApp {
         }
     }
 
+    fn settings_overview(&mut self, ui: &mut egui::Ui) {
+        settings_heading(ui, "Visão geral", "Acesse rapidamente as áreas de configuração e confira o estado do aplicativo.");
+        ui.add_space(12.0);
+        let connection = if self.admin_unlocked { "Conectado" } else { "Somente local" };
+        ui.columns(4, |columns| {
+            settings_dashboard_card(&mut columns[0], "UNIDADES", self.preferences.chalet_names.len().to_string(), "chalés configurados", ORANGE);
+            settings_dashboard_card(&mut columns[1], "RESERVAS", self.business_data.reservations.len().to_string(), "registros neste app", INK);
+            settings_dashboard_card(&mut columns[2], "CATÁLOGO", self.products.len().to_string(), if self.products_loading { "sincronizando…" } else { "produtos carregados" }, GREEN_MID);
+            settings_dashboard_card(&mut columns[3], "BANCO DO SITE", connection, if self.admin_unlocked { "sincronização ativa" } else { "cache local disponível" }, if self.admin_unlocked { GREEN_MID } else { MUTED });
+        });
+        ui.add_space(18.0);
+        ui.label(RichText::new("ACESSO RÁPIDO").size(10.0).strong().color(ORANGE));
+        ui.add_space(8.0);
+        let mut destination = None;
+        let icons = &self.icons;
+        ui.columns(3, |columns| {
+            if settings_quick_access(&mut columns[0], icons, "Perfil da loja", "Nome e canais de atendimento", Icon::House) { destination = Some(SettingsPage::Loja); }
+            if settings_quick_access(&mut columns[1], icons, "Chalés", "Unidades e calendário", Icon::BedDouble) { destination = Some(SettingsPage::Chales); }
+            if settings_quick_access(&mut columns[2], icons, "Dados e conexão", "Banco online e backup local", Icon::Refresh) { destination = Some(SettingsPage::Dados); }
+        });
+        if let Some(page) = destination {
+            self.settings_page = page;
+            self.settings_notice = None;
+        }
+        ui.add_space(18.0);
+        Frame::new().fill(SURFACE_ALT).stroke(Stroke::new(1.0, LINE)).corner_radius(14.0).inner_margin(14.0).show(ui, |ui| {
+            ui.label(RichText::new("ESTADO DOS SERVIÇOS").size(10.0).strong().color(ORANGE));
+            ui.add_space(7.0);
+            settings_status(ui, "Catálogo online", if self.products_loading { "Sincronizando" } else if self.product_error.is_some() { "Sem conexão" } else { "Disponível" });
+            settings_status(ui, "Reservas e financeiro", if self.admin_unlocked { "Banco do site conectado" } else { "Cache local · conexão não iniciada" });
+            settings_status(ui, "Preferências", if self.preferences_path.is_some() { "Salvas neste dispositivo" } else { "Caminho indisponível" });
+        });
+    }
+
     fn settings_store(&mut self, ui: &mut egui::Ui) {
         settings_heading(
             ui,
             "Perfil da loja",
-            "Identidade e formas de contato exibidas aos clientes.",
+            "Mantenha a identidade e os canais de contato usados pelas telas do aplicativo.",
         );
-        ui.add_space(14.0);
-        settings_field(
-            ui,
-            "Nome da loja",
-            &mut self.preferences.store_name,
-            "Matto Chalés",
-        );
-        settings_field(
-            ui,
-            "Apresentação",
-            &mut self.preferences.tagline,
-            "Frase curta para sua loja",
-        );
-        ui.columns(2, |columns| {
-            settings_field(
-                &mut columns[0],
-                "WhatsApp para pedidos",
-                &mut self.preferences.whatsapp,
-                "+55 00 00000-0000",
-            );
-            settings_field(
-                &mut columns[1],
-                "Chave Pix",
-                &mut self.preferences.pix_key,
-                "E-mail, telefone ou chave aleatória",
-            );
+        ui.add_space(12.0);
+        settings_group(ui, "IDENTIDADE", "Nome e apresentação da hospedagem", |ui| {
+            settings_field(ui, "Nome da loja", &mut self.preferences.store_name, "Matto Chalés");
+            settings_field(ui, "Apresentação", &mut self.preferences.tagline, "Frase curta para sua loja");
         });
-        ui.add_space(10.0);
-        Frame::new()
-            .fill(SURFACE_ALT)
-            .corner_radius(12)
-            .inner_margin(14.0)
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    icons::image(ui, &self.icons, Icon::ShoppingBag, 19.0, GREEN);
-                    ui.vertical(|ui| {
-                        ui.label(RichText::new("Dados usados no checkout").strong().color(INK));
-                        ui.label(RichText::new("Preferências guardadas localmente no aplicativo; ainda não alteram o checkout do site.").size(11.0).color(MUTED));
-                    });
-                });
+        ui.add_space(12.0);
+        settings_group(ui, "CANAIS DE ATENDIMENTO", "Informações para pagamentos e pedidos", |ui| {
+            ui.columns(2, |columns| {
+                settings_field(&mut columns[0], "WhatsApp para pedidos", &mut self.preferences.whatsapp, "+55 00 00000-0000");
+                settings_field(&mut columns[1], "Chave Pix", &mut self.preferences.pix_key, "E-mail, telefone ou chave aleatória");
             });
+        });
+        ui.add_space(12.0);
+        settings_info_card(ui, &self.icons, Icon::ShoppingBag, "Onde essas informações são usadas", "As preferências ficam salvas neste aplicativo. Ainda não alteram o checkout publicado no site.");
     }
 
     fn settings_chalets(&mut self, ui: &mut egui::Ui) {
@@ -4062,45 +4107,41 @@ impl DashboardApp {
             "Unidades e reservas",
             "Organize os nomes das unidades e preferências do calendário.",
         );
-        ui.add_space(14.0);
-        ui.label(
-            RichText::new("Unidades cadastradas")
-                .size(13.0)
-                .strong()
-                .color(INK),
-        );
-        ui.label(
-            RichText::new("O seletor da tela de disponibilidade acompanha a lista abaixo.")
-                .size(11.0)
-                .color(MUTED),
-        );
-        ui.add_space(8.0);
+        ui.add_space(12.0);
+        let reserved_chalets: HashSet<String> = self.business_data.reservations.iter().map(|item| item.chalet.clone()).collect();
+        let chalet_count = self.preferences.chalet_names.len();
+        let mut remove_index = None;
+        settings_group(ui, "UNIDADES CADASTRADAS", "Os nomes aparecem no calendário e no formulário de reservas.", |ui| {
         for (index, name) in self.preferences.chalet_names.iter_mut().enumerate() {
             ui.horizontal(|ui| {
-                ui.label(
-                    RichText::new(format!("{:02}", index + 1))
-                        .size(12.0)
-                        .strong()
-                        .color(GREEN),
-                );
+                ui.label(RichText::new(format!("{:02}", index + 1)).size(12.0).strong().color(ORANGE));
                 ui.add_sized(
-                    Vec2::new(420.0, 34.0),
-                    egui::TextEdit::singleline(name).hint_text("Nome da unidade"),
+                    Vec2::new((ui.available_width() - 110.0).max(180.0), 36.0),
+                    egui::TextEdit::singleline(name).hint_text("Ex.: Chalé da Mata"),
                 );
+                let protected = reserved_chalets.contains(name.as_str());
+                if ui.add_enabled(!protected && chalet_count > 1, egui::Button::new("Remover").fill(SURFACE).stroke(Stroke::new(1.0, LINE)).corner_radius(9.0)).on_hover_text(if protected { "Este chalé aparece em reservas salvas." } else { "Remover unidade" }).clicked() {
+                    remove_index = Some(index);
+                }
             });
+            if reserved_chalets.contains(name.as_str()) {
+                ui.label(RichText::new("Há reservas salvas vinculadas a esta unidade.").size(9.5).color(MUTED));
+            }
         }
-        ui.add_space(15.0);
-        ui.checkbox(
-            &mut self.preferences.compact_calendar,
-            "Usar calendário compacto",
-        );
-        ui.label(
-            RichText::new(
-                "A ocupação e os bloqueios ainda são armazenados localmente neste computador.",
-            )
-            .size(11.0)
-            .color(MUTED),
-        );
+        ui.add_space(8.0);
+        if ui.add(egui::Button::new("+ Adicionar chalé").fill(ORANGE_PALE).stroke(Stroke::new(1.0, LINE)).corner_radius(10.0)).clicked() {
+            if self.preferences.chalet_names.len() < 20 {
+                self.preferences.chalet_names.push(format!("Chalé {:02}", self.preferences.chalet_names.len() + 1));
+            } else {
+                self.settings_notice = Some("O aplicativo aceita até 20 unidades.".to_owned());
+            }
+        }
+        });
+        if let Some(index) = remove_index {
+            self.preferences.chalet_names.remove(index);
+        }
+        ui.add_space(12.0);
+        settings_info_card(ui, &self.icons, Icon::CalendarDays, "Disponibilidade", "Bloqueios de datas e calendário continuam sendo salvos localmente neste dispositivo.");
     }
 
     fn settings_catalog(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
@@ -4260,23 +4301,11 @@ impl DashboardApp {
             });
 
         ui.add_space(12.0);
-        ui.label(
-            RichText::new("Alerta de estoque baixo")
-                .size(12.0)
-                .strong()
-                .color(INK),
-        );
-        ui.horizontal(|ui| {
-            ui.add(
-                egui::DragValue::new(&mut self.preferences.low_stock_threshold)
-                    .range(0..=999)
-                    .suffix(" unidades"),
-            );
-            ui.label(
-                RichText::new("Este limite é uma preferência local do aplicativo.")
-                    .size(11.0)
-                    .color(MUTED),
-            );
+        settings_group(ui, "ALERTAS DE ESTOQUE", "Defina quando destacar os itens com poucas unidades", |ui| {
+            ui.horizontal(|ui| {
+                ui.add(egui::DragValue::new(&mut self.preferences.low_stock_threshold).range(0..=999).suffix(" unidades"));
+                ui.label(RichText::new("O limite é salvo nas preferências deste aplicativo.").size(10.5).color(MUTED));
+            });
         });
     }
 
@@ -4660,23 +4689,33 @@ impl DashboardApp {
         settings_heading(
             ui,
             "Aparência e navegação",
-            "Ajuste o acabamento visual do aplicativo desktop.",
+            "Ajuste a navegação e a densidade do calendário para sua rotina.",
         );
-        ui.add_space(14.0);
-        ui.checkbox(
-            &mut self.preferences.glass_effect,
-            "Efeito de vidro fosco na barra de navegação",
-        );
-        ui.label(RichText::new("Usa transparência suave, superfície clara e contorno para destacar o menu flutuante.").size(11.0).color(MUTED));
         ui.add_space(12.0);
-        ui.add_space(16.0);
-        Frame::new().fill(SURFACE_ALT).corner_radius(12).inner_margin(14.0).show(ui, |ui| {
+        settings_group(ui, "NAVEGAÇÃO", "Preferências da barra inferior do aplicativo", |ui| {
+            ui.checkbox(&mut self.preferences.glass_effect, "Usar superfície translúcida na navegação");
+            ui.label(RichText::new("Aplica o efeito de vidro fosco e contorno no menu flutuante.").size(10.5).color(MUTED));
+        });
+        ui.add_space(12.0);
+        settings_group(ui, "CALENDÁRIO", "Escolha quanto conteúdo aparece em cada dia", |ui| {
+            ui.checkbox(&mut self.preferences.compact_calendar, "Usar calendário compacto");
+            ui.label(RichText::new("Reduz a altura das células para exibir o mês com mais espaço livre.").size(10.5).color(MUTED));
+        });
+        ui.add_space(12.0);
+        Frame::new().fill(SURFACE_ALT).stroke(Stroke::new(1.0, LINE)).corner_radius(14.0).inner_margin(14.0).show(ui, |ui| {
+            ui.label(RichText::new("PALETA MATTO CHALÉS").size(10.0).strong().color(MUTED));
+            ui.add_space(8.0);
             ui.horizontal(|ui| {
-                icons::image(ui, &self.icons, Icon::Settings, 20.0, GREEN);
-                ui.vertical(|ui| {
-                    ui.label(RichText::new("Tema da Matto Chalés").strong().color(INK));
-                    ui.label(RichText::new("Verde pinho, tons de pedra e detalhes naturais inspirados na identidade da marca.").size(11.0).color(MUTED));
-                });
+                for (name, color) in [("Madeira", SURFACE), ("Caramelo", GREEN), ("Âmbar", ORANGE), ("Creme", INK)] {
+                    ui.vertical(|ui| {
+                        let (rect, _) = ui.allocate_exact_size(Vec2::new(54.0, 24.0), Sense::hover());
+                        ui.painter().rect_filled(rect, 8.0, color);
+                        ui.painter().rect_stroke(rect, 8.0, Stroke::new(1.0, LINE), egui::StrokeKind::Inside);
+                        ui.add_space(4.0);
+                        ui.label(RichText::new(name).size(9.0).color(MUTED));
+                    });
+                    ui.add_space(10.0);
+                }
             });
         });
     }
@@ -4685,78 +4724,93 @@ impl DashboardApp {
         settings_heading(
             ui,
             "Dados e conexão",
-            "Confira onde as preferências ficam salvas e o estado dos serviços.",
-        );
-        ui.add_space(14.0);
-        settings_status(
-            ui,
-            "Preferências do aplicativo",
-            "Armazenadas neste computador",
-        );
-        settings_status(ui, "Disponibilidade", "Arquivo local · não sincronizado");
-        settings_status(
-            ui,
-            "Reservas e financeiro",
-            if self.admin_unlocked { "Conectado ao banco do site" } else { "Cache local · conecte para sincronizar" },
-        );
-        if self.admin_unlocked {
-            ui.horizontal(|ui| {
-                ui.label(RichText::new("Conexão autenticada; alterações são sincronizadas com o site.").size(11.0).color(MUTED));
-                if ui.button("Desconectar").clicked() {
-                    self.admin_unlocked = false;
-                    self.admin_token.clear();
-                }
-            });
-        } else {
-            ui.horizontal(|ui| {
-                ui.add_sized(
-                    Vec2::new(340.0, 36.0),
-                    egui::TextEdit::singleline(&mut self.admin_token).password(true).hint_text("Chave de administração do site"),
-                );
-                let unlock = ui.add_enabled(!self.admin_busy, egui::Button::new(if self.admin_busy { "Conectando…" } else { "Conectar ao banco" }).fill(GREEN).corner_radius(10));
-                if unlock.clicked() {
-                    self.authenticate_admin(ctx.clone());
-                }
-            });
-            if let Some(error) = &self.admin_error {
-                ui.label(RichText::new(error).size(11.0).color(RED));
-            }
-        }
-        ui.label(RichText::new("Reservas e financeiro mantêm uma cópia local e sincronizam quando esta conexão está ativa. A chave fica apenas na memória do app.").size(10.0).color(MUTED));
-        ui.add_space(8.0);
-        settings_status(
-            ui,
-            "Catálogo de produtos",
-            if self.product_error.is_some() {
-                "API sem conexão no momento"
-            } else if self.products_loading {
-                "Sincronização em andamento"
-            } else {
-                "Catálogo carregado"
-            },
+            "Acompanhe a sincronização e proteja uma cópia dos dados deste dispositivo.",
         );
         ui.add_space(12.0);
-        let path = self
-            .preferences_path
-            .as_ref()
-            .map(|path| path.display().to_string())
-            .unwrap_or_else(|| "Caminho indisponível".to_owned());
-        ui.label(
-            RichText::new("Arquivo de preferências")
-                .size(12.0)
-                .strong()
-                .color(INK),
-        );
-        ui.label(RichText::new(path).size(10.0).color(MUTED));
-        ui.add_space(14.0);
-        if ui.button("Restaurar preferências padrão").clicked() {
-            self.preferences = AppPreferences::default();
-            self.settings_notice =
-                Some("Preferências padrão restauradas. Salve para aplicar.".to_owned());
+        ui.columns(3, |columns| {
+            settings_dashboard_card(&mut columns[0], "RESERVAS", self.business_data.reservations.len().to_string(), "cópias neste dispositivo", ORANGE);
+            settings_dashboard_card(&mut columns[1], "MOVIMENTAÇÕES", self.business_data.movements.len().to_string(), "registros financeiros", INK);
+            settings_dashboard_card(&mut columns[2], "CONTAS A PAGAR", self.business_data.payables.len().to_string(), "registros locais", GREEN_MID);
+        });
+        ui.add_space(12.0);
+        settings_group(ui, "BANCO DO SITE", "Reservas e financeiro usam a API protegida do site", |ui| {
+            settings_status(ui, "Estado da conexão", if self.admin_unlocked { "Conectado e sincronizando" } else { "Desconectado · dados locais preservados" });
+            if self.admin_unlocked {
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("As alterações são enviadas ao banco enquanto a sessão estiver conectada.").size(10.5).color(MUTED));
+                    if ui.add(egui::Button::new("Desconectar").fill(SURFACE).stroke(Stroke::new(1.0, LINE)).corner_radius(9.0)).clicked() {
+                        self.admin_unlocked = false;
+                        self.admin_token.clear();
+                    }
+                });
+            } else {
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    ui.add_sized(Vec2::new(330.0, 36.0), egui::TextEdit::singleline(&mut self.admin_token).password(true).hint_text("Chave administrativa do site"));
+                    let connect = ui.add_enabled(!self.admin_busy, egui::Button::new(if self.admin_busy { "Conectando…" } else { "Conectar" }).fill(GREEN).stroke(Stroke::new(1.0, GREEN_MID)).corner_radius(10.0));
+                    if connect.clicked() { self.authenticate_admin(ctx.clone()); }
+                });
+                if let Some(error) = &self.admin_error { ui.add_space(5.0); ui.label(RichText::new(error).size(10.5).color(RED)); }
+            }
+            ui.label(RichText::new("A chave é mantida apenas na memória durante esta sessão. O cache local continua disponível se a internet cair.").size(10.0).color(MUTED));
+        });
+        ui.add_space(12.0);
+        settings_group(ui, "BACKUP E ARQUIVOS", "Exporte preferências, reservas, financeiro e datas bloqueadas", |ui| {
+            ui.horizontal(|ui| {
+                if ui.add(egui::Button::new("Exportar backup JSON").fill(GREEN).stroke(Stroke::new(1.0, GREEN_MID)).corner_radius(10.0)).clicked() {
+                    self.export_application_backup();
+                }
+                if ui.add(egui::Button::new("Abrir pasta de dados").fill(SURFACE).stroke(Stroke::new(1.0, LINE)).corner_radius(10.0)).clicked() {
+                    if let Some(path) = self.business_path.as_ref().or(self.preferences_path.as_ref()).and_then(|path| path.parent()) { let _ = open::that(path); }
+                }
+            });
+            ui.label(RichText::new("Os anexos de reserva continuam em seus caminhos originais e não são copiados para o backup.").size(10.0).color(MUTED));
+            let preferences_path = self.preferences_path.as_ref().map(|path| path.display().to_string()).unwrap_or_else(|| "Indisponível".to_owned());
+            ui.label(RichText::new(format!("Preferências: {preferences_path}")).size(9.5).color(MUTED));
+        });
+        ui.add_space(12.0);
+        settings_group(ui, "PREFERÊNCIAS", "Restaure os valores padrão do aplicativo", |ui| {
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Esta ação altera as preferências editáveis; salve para gravar.").size(10.5).color(MUTED));
+                if ui.add(egui::Button::new("Restaurar padrões").fill(RED_PALE).stroke(Stroke::new(1.0, RED)).corner_radius(9.0)).clicked() {
+                    self.preferences = AppPreferences::default();
+                    self.settings_notice = Some("Preferências padrão restauradas. Revise e salve para aplicar.".to_owned());
+                }
+            });
+        });
+    }
+
+    fn export_application_backup(&mut self) {
+        let Some(path) = rfd::FileDialog::new().set_file_name("matto-chales-backup.json").add_filter("Arquivo JSON", &["json"]).save_file() else {
+            return;
+        };
+        let backup = ApplicationBackup {
+            preferences: self.preferences.clone(),
+            business_data: self.business_data.clone(),
+            blocked_dates: self.blocked_dates.clone(),
+        };
+        match serde_json::to_vec_pretty(&backup).map_err(|error| error.to_string()).and_then(|bytes| fs::write(path, bytes).map_err(|error| error.to_string())) {
+            Ok(()) => self.settings_notice = Some("Backup exportado com sucesso.".to_owned()),
+            Err(error) => self.settings_notice = Some(format!("Não foi possível exportar o backup: {error}")),
         }
     }
 
     fn save_preferences(&mut self) {
+        if self.preferences.store_name.trim().is_empty() {
+            self.settings_notice = Some("Informe o nome da loja antes de salvar.".to_owned());
+            return;
+        }
+        if self.preferences.chalet_names.is_empty()
+            || self.preferences.chalet_names.iter().any(|name| name.trim().is_empty())
+        {
+            self.settings_notice = Some("Todas as unidades precisam ter um nome.".to_owned());
+            return;
+        }
+        let unique_names: HashSet<String> = self.preferences.chalet_names.iter().map(|name| name.trim().to_lowercase()).collect();
+        if unique_names.len() != self.preferences.chalet_names.len() {
+            self.settings_notice = Some("Os nomes dos chalés precisam ser únicos.".to_owned());
+            return;
+        }
         let Some(path) = &self.preferences_path else {
             self.settings_notice =
                 Some("Não foi possível localizar a pasta de dados do aplicativo.".to_owned());
@@ -4770,6 +4824,7 @@ impl DashboardApp {
             .and_then(|data| fs::write(path, data).map_err(|error| error.to_string()))
         {
             Ok(()) => {
+                self.saved_preferences = self.preferences.clone();
                 self.settings_notice = Some("Configurações salvas neste computador.".to_owned())
             }
             Err(_) => {
@@ -5662,7 +5717,6 @@ impl eframe::App for DashboardApp {
             if finance_modal_open {
                 self.finance_windows(&ctx);
             }
-            self.show_update_notice(&ctx);
             self.show_update_prompt(&ctx);
             if !self.reservation_form_open
                 && self.reservation_details_id.is_none()
@@ -5677,7 +5731,6 @@ impl eframe::App for DashboardApp {
         self.title_bar(root);
         if self.section == Section::Launcher {
             self.show_launcher(root);
-            self.show_update_notice(&ctx);
             self.show_update_prompt(&ctx);
             return;
         }
@@ -5694,7 +5747,6 @@ impl eframe::App for DashboardApp {
                 Section::Adega => self.show_adega(ui, &ctx),
                 Section::Configuracoes => self.show_settings(ui, &ctx),
             });
-        self.show_update_notice(&ctx);
         self.show_update_prompt(&ctx);
     }
 }
@@ -6309,6 +6361,55 @@ fn settings_heading(ui: &mut egui::Ui, title: &str, subtitle: &str) {
     ui.label(RichText::new(subtitle).size(12.0).color(MUTED));
     ui.add_space(6.0);
     ui.separator();
+}
+
+fn settings_group<R>(ui: &mut egui::Ui, eyebrow: &str, title: &str, add_contents: impl FnOnce(&mut egui::Ui) -> R) -> egui::InnerResponse<R> {
+    Frame::new()
+        .fill(SURFACE_ALT)
+        .stroke(Stroke::new(1.0, LINE))
+        .corner_radius(14.0)
+        .inner_margin(Margin::symmetric(15, 13))
+        .show(ui, |ui| {
+            ui.label(RichText::new(eyebrow).size(9.5).strong().color(ORANGE));
+            ui.add_space(3.0);
+            ui.label(RichText::new(title).size(12.0).strong().color(INK));
+            ui.add_space(8.0);
+            add_contents(ui)
+        })
+}
+
+fn settings_info_card(ui: &mut egui::Ui, icons: &HashMap<Icon, TextureHandle>, icon: Icon, title: &str, detail: &str) {
+    Frame::new().fill(SURFACE_ALT).stroke(Stroke::new(1.0, LINE)).corner_radius(12.0).inner_margin(13.0).show(ui, |ui| {
+        ui.horizontal(|ui| {
+            icons::image(ui, icons, icon, 20.0, ORANGE);
+            ui.vertical(|ui| {
+                ui.label(RichText::new(title).size(11.5).strong().color(INK));
+                ui.label(RichText::new(detail).size(10.0).color(MUTED));
+            });
+        });
+    });
+}
+
+fn settings_dashboard_card(ui: &mut egui::Ui, label: &str, value: impl ToString, description: &str, accent: Color32) {
+    Frame::new().fill(SURFACE_ALT).stroke(Stroke::new(1.0, LINE)).corner_radius(13.0).inner_margin(Margin::symmetric(12, 10)).show(ui, |ui| {
+        ui.label(RichText::new(label).size(9.0).strong().color(MUTED));
+        ui.add_space(3.0);
+        ui.label(RichText::new(value.to_string()).size(20.0).strong().color(accent));
+        ui.label(RichText::new(description).size(9.0).color(MUTED));
+    });
+}
+
+fn settings_quick_access(ui: &mut egui::Ui, icons: &HashMap<Icon, TextureHandle>, title: &str, description: &str, icon: Icon) -> bool {
+    let mut open = false;
+    Frame::new().fill(SURFACE_ALT).stroke(Stroke::new(1.0, LINE)).corner_radius(14.0).inner_margin(14.0).show(ui, |ui| {
+        icons::image(ui, icons, icon, 20.0, ORANGE);
+        ui.add_space(7.0);
+        ui.label(RichText::new(title).size(13.0).strong().color(INK));
+        ui.label(RichText::new(description).size(9.5).color(MUTED));
+        ui.add_space(8.0);
+        open = ui.add(egui::Button::new("Abrir seção  ›").fill(SURFACE).stroke(Stroke::new(1.0, LINE)).corner_radius(9.0)).clicked();
+    });
+    open
 }
 
 fn adega_metric(
