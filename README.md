@@ -27,6 +27,6 @@ O launcher consulta a GitHub Release mais recente em `kawan242freitas-gif/Mattoc
 
 ## Publicar uma versão
 
-Crie e envie uma tag `vMAJOR.MINOR.PATCH` neste repositório. A Action do GitHub compila o app Windows, cria o instalador e publica a Release com `latest.json`. Exemplo de próxima versão: `v0.1.73`.
+Crie e envie uma tag `vMAJOR.MINOR.PATCH` neste repositório. A Action do GitHub compila o app Windows, cria o instalador e publica a Release com `latest.json`. Exemplo de próxima versão: `v0.1.74`.
 
 O launcher ignora releases da mesma versão ou anteriores. Não publique uma Release sem o instalador `MattoChales-Setup-X.Y.Z.exe` e o digest SHA-256 calculado pelo GitHub.

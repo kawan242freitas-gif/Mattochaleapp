@@ -43,6 +43,11 @@ pub enum Icon {
     Balloon,
     BadgeExclamationPoint,
     FileText,
+    Banknote,
+    CirclePoundSterling,
+    CreditCard,
+    CreditCardCheck,
+    Newspaper,
 }
 
 pub fn load(ctx: &egui::Context) -> HashMap<Icon, TextureHandle> {
@@ -152,6 +157,20 @@ pub fn load(ctx: &egui::Context) -> HashMap<Icon, TextureHandle> {
             Icon::FileText,
             include_str!("../assets/lucide/file-text.svg"),
         ),
+        (Icon::Banknote, include_str!("../assets/lucide/banknote.svg")),
+        (
+            Icon::CirclePoundSterling,
+            include_str!("../assets/lucide/circle-pound-sterling.svg"),
+        ),
+        (
+            Icon::CreditCard,
+            include_str!("../assets/lucide/credit-card.svg"),
+        ),
+        (
+            Icon::CreditCardCheck,
+            include_str!("../assets/lucide/credit-card-check.svg"),
+        ),
+        (Icon::Newspaper, include_str!("../assets/lucide/newspaper.svg")),
     ]
     .into_iter()
     .filter_map(|(icon, svg)| rasterize(ctx, icon, svg).map(|texture| (icon, texture)))

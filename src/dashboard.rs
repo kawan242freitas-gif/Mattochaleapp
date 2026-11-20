@@ -1156,14 +1156,14 @@ impl DashboardApp {
                         } else {
                             self.update_notice_expanded = false;
                         }
-                        if !update_pending {
+                        if !update_pending && self.section == Section::Reservas {
                             profile_response.clone().on_hover_text("Abrir menu");
                         }
                         if update_pending {
                             if profile_response.clicked() {
                                 self.update_prompt_open = true;
                             }
-                        } else {
+                        } else if self.section == Section::Reservas {
                             if profile_response.clicked() {
                                 if !egui::Popup::is_id_open(&ctx, egui::Id::new("profile-functions-menu")) {
                                     self.profile_menu_backdrop_texture =
@@ -1263,9 +1263,21 @@ impl DashboardApp {
                                             }
                                         });
                                 });
-                            if !egui::Popup::is_id_open(&ctx, egui::Id::new("profile-functions-menu")) {
+                            let profile_menu_id = egui::Id::new("profile-functions-menu");
+                            if self.section != Section::Reservas
+                                && egui::Popup::is_id_open(&ctx, profile_menu_id)
+                            {
+                                egui::Popup::close_id(&ctx, profile_menu_id);
+                            }
+                            if !egui::Popup::is_id_open(&ctx, profile_menu_id) {
                                 self.profile_menu_backdrop_texture = None;
                             }
+                        } else {
+                            let profile_menu_id = egui::Id::new("profile-functions-menu");
+                            if egui::Popup::is_id_open(&ctx, profile_menu_id) {
+                                egui::Popup::close_id(&ctx, profile_menu_id);
+                            }
+                            self.profile_menu_backdrop_texture = None;
                         }
                     }
                 });
@@ -3262,7 +3274,7 @@ impl DashboardApp {
                                                         .on_hover_text("Abrir documento")
                                                         .clicked()
                                                     {
-                                                        let _ = open::that(path);
+                                                        let _ = open_reservation_attachment(path);
                                                     }
                                                 });
                                             });
@@ -3613,6 +3625,7 @@ impl DashboardApp {
                 .fixed_pos(ctx.content_rect().center())
                 .pivot(Align2::CENTER_CENTER)
                 .default_width(470.0)
+                .default_size(Vec2::new(470.0, 500.0))
                 .show(ctx, |ui| {
                     let visuals = &mut ui.style_mut().visuals;
                     visuals.widgets.inactive.bg_fill = SURFACE;
@@ -3640,11 +3653,10 @@ impl DashboardApp {
                         "Como e onde você gastou?"
                     });
                     ui.text_edit_singleline(&mut self.movement_form.description);
-                    ui.horizontal(|ui| {
-                        ui.vertical(|ui| {
-                            ui.label("Valor");
-                            ui.text_edit_singleline(&mut self.movement_form.amount);
-                        });
+                    ui.vertical(|ui| {
+                        ui.label("Valor");
+                        ui.text_edit_singleline(&mut self.movement_form.amount);
+                        ui.add_space(7.0);
                         reservation_date_wheel(
                             ui,
                             "Data",
@@ -3652,12 +3664,14 @@ impl DashboardApp {
                             &mut self.movement_form.date,
                         );
                     });
+                    ui.add_space(7.0);
                     ui.horizontal(|ui| {
                         ui.vertical(|ui| {
                             ui.label("Forma / conta");
                             finance_glass_dropdown(
                                 ui,
                                 "movement-method",
+                                &self.icons,
                                 &mut self.movement_form.payment_method,
                                 payment_methods()
                                     .iter()
@@ -3672,6 +3686,7 @@ impl DashboardApp {
                             finance_glass_dropdown(
                                 ui,
                                 "movement-category",
+                                &self.icons,
                                 &mut self.movement_form.category,
                                 movement_categories().iter().copied(),
                                 164.0,
@@ -6587,6 +6602,7 @@ fn new_record_id() -> String {
 fn finance_glass_dropdown(
     ui: &mut egui::Ui,
     id: &'static str,
+    icons: &HashMap<Icon, TextureHandle>,
     selected: &mut String,
     options: impl IntoIterator<Item = &'static str>,
     width: f32,
@@ -6596,10 +6612,29 @@ fn finance_glass_dropdown(
     let popup_was_open = egui::Popup::is_id_open(ui.ctx(), popup_id);
     let response = ui.add_sized(
         Vec2::new(width, 32.0),
-        egui::Button::new(RichText::new(selected.as_str()).size(12.0).color(INK))
+        egui::Button::new("")
             .fill(SURFACE_ALT)
             .stroke(Stroke::new(1.0, LINE))
             .corner_radius(7.0),
+    );
+    if let Some(icon) = payment_method_icon(selected) {
+        icons::paint_in_rect(
+            ui,
+            icons,
+            icon,
+            Rect::from_center_size(
+                Pos2::new(response.rect.left() + 18.0, response.rect.center().y),
+                Vec2::splat(15.0),
+            ),
+            ORANGE,
+        );
+    }
+    ui.painter().text(
+        Pos2::new(response.rect.left() + 34.0, response.rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        selected.as_str(),
+        FontId::proportional(12.0),
+        INK,
     );
     ui.painter().text(
         Pos2::new(response.rect.right() - 16.0, response.rect.center().y),
@@ -6689,9 +6724,34 @@ fn finance_glass_dropdown(
                                     Vec2::new(width - 12.0, 31.0),
                                     egui::Button::selectable(
                                         selected == option,
-                                        RichText::new(option).size(12.0).color(INK),
+                                        "",
                                     )
                                     .corner_radius(6.0),
+                                );
+                                if let Some(icon) = payment_method_icon(option) {
+                                    icons::paint_in_rect(
+                                        options_ui,
+                                        icons,
+                                        icon,
+                                        Rect::from_center_size(
+                                            Pos2::new(
+                                                option_response.rect.left() + 17.0,
+                                                option_response.rect.center().y,
+                                            ),
+                                            Vec2::splat(15.0),
+                                        ),
+                                        ORANGE,
+                                    );
+                                }
+                                options_ui.painter().text(
+                                    Pos2::new(
+                                        option_response.rect.left() + 32.0,
+                                        option_response.rect.center().y,
+                                    ),
+                                    egui::Align2::LEFT_CENTER,
+                                    option,
+                                    FontId::proportional(12.0),
+                                    INK,
                                 );
                                 if option_response.clicked() {
                                     *selected = option.to_owned();
@@ -6712,12 +6772,19 @@ fn payment_methods() -> &'static [&'static str] {
         "PIX",
         "Cartão de crédito",
         "Cartão de débito",
-        "Transferência",
-        "Conta bancária",
-        "Cheque",
         "Boleto",
-        "Outro",
     ]
+}
+
+fn payment_method_icon(method: &str) -> Option<Icon> {
+    match method {
+        "Dinheiro" => Some(Icon::Banknote),
+        "PIX" => Some(Icon::CirclePoundSterling),
+        "Cartão de crédito" => Some(Icon::CreditCard),
+        "Cartão de débito" => Some(Icon::CreditCardCheck),
+        "Boleto" => Some(Icon::Newspaper),
+        _ => None,
+    }
 }
 
 fn movement_categories() -> &'static [&'static str] {
@@ -6850,6 +6917,23 @@ fn attachment_metadata(path: &str) -> String {
         format!("{} KB", size.div_ceil(1024))
     };
     format!("{kind} · {size_label}")
+}
+
+fn open_reservation_attachment(path: &str) -> std::io::Result<()> {
+    #[cfg(windows)]
+    if PathBuf::from(path).is_file() {
+        // Windows adds this alternate stream to internet-downloaded files and
+        // Photos shows a trust prompt when opening them. Remove it only after
+        // the user explicitly chooses to open this reservation attachment.
+        let zone_identifier = format!("{path}:Zone.Identifier");
+        match fs::remove_file(zone_identifier) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => {}
+        }
+    }
+
+    open::that(path)
 }
 
 fn reservation_detail_chip(
