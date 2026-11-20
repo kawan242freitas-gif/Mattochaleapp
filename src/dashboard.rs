@@ -258,6 +258,7 @@ pub struct DashboardApp {
     reservation_form_open: bool,
     pending_modal_backdrop: Option<image::RgbaImage>,
     modal_backdrop_texture: Option<TextureHandle>,
+    chalet_filter_backdrop_texture: Option<TextureHandle>,
     reservation_form: ReservationForm,
     editing_reservation_id: Option<String>,
     reservation_details_id: Option<String>,
@@ -387,6 +388,7 @@ impl DashboardApp {
             reservation_form_open: false,
             pending_modal_backdrop: None,
             modal_backdrop_texture: None,
+            chalet_filter_backdrop_texture: None,
             reservation_form: ReservationForm::default(),
             editing_reservation_id: None,
             reservation_details_id: None,
@@ -631,8 +633,10 @@ impl DashboardApp {
             )
             .show(root, |ui| {
                 let rect = ui.max_rect();
-                let drag_rect =
-                    Rect::from_min_max(rect.min, Pos2::new(rect.right() - 145.0, rect.bottom()));
+                let drag_rect = Rect::from_min_max(
+                    rect.min,
+                    Pos2::new(rect.right() - if launcher { 205.0 } else { 145.0 }, rect.bottom()),
+                );
                 let drag = ui.interact(drag_rect, ui.scope_id().with("window-drag"), Sense::drag());
                 if drag.drag_started() {
                     ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
@@ -687,59 +691,133 @@ impl DashboardApp {
                         if self.window_control(ui, Icon::Minus, "Minimizar") {
                             ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
                         }
+                        if launcher {
+                            let response = ui.add_sized(
+                                Vec2::splat(34.0),
+                                egui::Button::new("")
+                                    .fill(Color32::from_rgb(48, 30, 20))
+                                    .stroke(Stroke::new(1.0, Color32::from_rgb(91, 59, 37)))
+                                    .corner_radius(17.0),
+                            );
+                            icons::paint_in_rect(
+                                ui,
+                                &self.icons,
+                                Icon::Tv,
+                                Rect::from_center_size(response.rect.center(), Vec2::splat(17.0)),
+                                title_color,
+                            );
+                            response.clone().on_hover_text("Novidades da versão");
+                            egui::Popup::menu(&response)
+                                .id(egui::Id::new("launcher-changelog-popup"))
+                                .width(310.0)
+                                .style(egui::style::StyleModifier::new(|style| {
+                                    style.visuals.window_fill = SURFACE;
+                                    style.visuals.window_stroke = Stroke::new(1.0, LINE);
+                                }))
+                                .show(|ui| {
+                                    Frame::new()
+                                        .fill(SURFACE)
+                                        .stroke(Stroke::new(1.0, LINE))
+                                        .corner_radius(10.0)
+                                        .inner_margin(Margin::same(14))
+                                        .show(ui, |ui| {
+                                            ui.horizontal(|ui| {
+                                                ui.label(
+                                                    RichText::new("Novidades")
+                                                        .size(16.0)
+                                                        .strong()
+                                                        .color(INK),
+                                                );
+                                                ui.with_layout(
+                                                    Layout::right_to_left(Align::Center),
+                                                    |ui| {
+                                                        ui.label(
+                                                            RichText::new(format!(
+                                                                "v{}",
+                                                                env!("CARGO_PKG_VERSION")
+                                                            ))
+                                                            .size(10.0)
+                                                            .color(MUTED),
+                                                        );
+                                                    },
+                                                );
+                                            });
+                                            ui.add_space(6.0);
+                                            ui.separator();
+                                            ui.add_space(4.0);
+                                            ui.label(
+                                                RichText::new("RESERVAS")
+                                                    .size(9.0)
+                                                    .strong()
+                                                    .color(ORANGE),
+                                            );
+                                            changelog_item(ui, "Seletores de datas e horários com rolagem.");
+                                            changelog_item(ui, "Fundo desfocado ao abrir uma reserva.");
+                                            ui.add_space(5.0);
+                                            ui.label(
+                                                RichText::new("INTERFACE")
+                                                    .size(9.0)
+                                                    .strong()
+                                                    .color(ORANGE),
+                                            );
+                                            changelog_item(ui, "Filtro de chalés com visual translúcido.");
+                                            changelog_item(ui, "Ajustes na pílula do perfil e no calendário.");
+                                        });
+                                });
+                        }
                     });
 
                     if !launcher && !self.profile_name.trim().is_empty() {
-                        let profile_width = (self.profile_name.chars().count() as f32 * 6.2 + 60.0)
-                            .clamp(96.0, 200.0);
+                        let name_width = self.profile_name.chars().count() as f32 * 7.3;
+                        let profile_width = (name_width + 84.0).clamp(120.0, 260.0);
                         let capsule = Rect::from_center_size(
                             Pos2::new(rect.center().x, rect.center().y),
-                            Vec2::new(profile_width, 34.0),
+                            Vec2::new(profile_width, 44.0),
                         );
                         let painter = ui.painter().clone();
-                        painter.rect_filled(capsule, 17.0, Color32::from_rgb(38, 24, 16));
+                        painter.rect_filled(capsule, 22.0, Color32::from_rgb(38, 24, 16));
                         painter.rect_stroke(
                             capsule,
-                            17.0,
+                            22.0,
                             Stroke::new(1.0, Color32::from_rgb(76, 49, 31)),
                             egui::StrokeKind::Inside,
                         );
                         let avatar_rect = Rect::from_min_size(
-                            Pos2::new(capsule.left() + 5.0, capsule.center().y - 12.0),
-                            Vec2::splat(24.0),
+                            Pos2::new(capsule.left() + 7.0, capsule.center().y - 16.0),
+                            Vec2::splat(32.0),
                         );
                         if let Some(frame) = self.profile_frames.get(self.profile_frame_index) {
                             ui.put(
                                 avatar_rect,
-                                egui::Image::new((frame.texture.id(), Vec2::splat(24.0)))
-                                    .fit_to_exact_size(Vec2::splat(24.0))
-                                    .corner_radius(12.0),
+                                egui::Image::new((frame.texture.id(), Vec2::splat(32.0)))
+                                    .fit_to_exact_size(Vec2::splat(32.0))
+                                    .corner_radius(16.0),
                             );
                         } else {
                             painter.circle_filled(
                                 avatar_rect.center(),
-                                12.0,
+                                16.0,
                                 Color32::from_rgb(62, 46, 33),
                             );
                             icons::paint_in_rect(
                                 ui,
                                 &self.icons,
                                 Icon::UserRound,
-                                avatar_rect.shrink(5.0),
+                                avatar_rect.shrink(7.0),
                                 INK,
                             );
                         }
+                        let name_left = avatar_rect.right() + 8.0;
                         painter.text(
-                            Pos2::new(avatar_rect.right() + 6.0, capsule.center().y),
+                            Pos2::new(name_left, capsule.center().y),
                             Align2::LEFT_CENTER,
                             &self.profile_name,
-                            FontId::proportional(11.0),
+                            FontId::proportional(13.0),
                             INK,
                         );
-                        let name_width = self.profile_name.chars().count() as f32 * 6.2;
                         let chevron_rect = Rect::from_center_size(
-                            Pos2::new(avatar_rect.right() + 6.0 + name_width + 10.0, capsule.center().y),
-                            Vec2::splat(12.0),
+                            Pos2::new(name_left + name_width + 10.0, capsule.center().y),
+                            Vec2::splat(16.0),
                         );
                         icons::paint_in_rect(
                             ui,
@@ -748,6 +826,55 @@ impl DashboardApp {
                             chevron_rect,
                             MUTED,
                         );
+                        let arrow_response = ui.interact(
+                            Rect::from_center_size(chevron_rect.center(), Vec2::splat(26.0)),
+                            ui.scope_id().with("profile-functions-menu-button"),
+                            Sense::click(),
+                        );
+                        arrow_response.clone().on_hover_text("Abrir menu");
+                        egui::Popup::menu(&arrow_response)
+                            .id(egui::Id::new("profile-functions-menu"))
+                            .width(206.0)
+                            .style(egui::style::StyleModifier::new(|style| {
+                                style.visuals.window_fill = SURFACE;
+                                style.visuals.window_stroke = Stroke::new(1.0, LINE);
+                            }))
+                            .show(|menu_ui| {
+                                Frame::new()
+                                    .fill(SURFACE)
+                                    .stroke(Stroke::new(1.0, LINE))
+                                    .corner_radius(10.0)
+                                    .inner_margin(Margin::same(8))
+                                    .show(menu_ui, |menu_ui| {
+                                        if profile_menu_item(
+                                            menu_ui,
+                                            &self.icons,
+                                            Icon::Sofa,
+                                            "Home",
+                                            self.section == Section::Launcher,
+                                        ) {
+                                            self.section = Section::Launcher;
+                                        }
+                                        if profile_menu_item(
+                                            menu_ui,
+                                            &self.icons,
+                                            Icon::ReceiptText,
+                                            "Financeiro",
+                                            self.section == Section::Financas,
+                                        ) {
+                                            self.section = Section::Financas;
+                                        }
+                                        if profile_menu_item(
+                                            menu_ui,
+                                            &self.icons,
+                                            Icon::SettingsMenu,
+                                            "Configurações",
+                                            self.section == Section::Configuracoes,
+                                        ) {
+                                            self.section = Section::Configuracoes;
+                                        }
+                                    });
+                            });
                     }
                 });
             });
@@ -1448,37 +1575,83 @@ impl DashboardApp {
                         });
                     });
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        egui::ComboBox::from_id_salt("reservation-chalet-filter")
-                            .selected_text(&self.calendar_chalet_filter)
-                            .width(142.0)
-                            .popup_style(egui::style::StyleModifier::new(|style| {
+                        let popup_id = ui.make_persistent_id("reservation-chalet-filter");
+                        let popup_was_open = egui::Popup::is_id_open(ui.ctx(), popup_id);
+                        let response = ui.add_sized(
+                            Vec2::new(142.0, 34.0),
+                            egui::Button::new(RichText::new(&self.calendar_chalet_filter).size(12.0).color(TEXT))
+                                .fill(SURFACE)
+                                .stroke(Stroke::new(1.0, BORDER))
+                                .corner_radius(8.0),
+                        );
+                        icons::paint_in_rect(
+                            ui,
+                            &self.icons,
+                            Icon::ChevronDown,
+                            Rect::from_center_size(
+                                Pos2::new(response.rect.right() - 17.0, response.rect.center().y),
+                                Vec2::splat(12.0),
+                            ),
+                            TEXT,
+                        );
+                        if response.clicked() && !popup_was_open {
+                            if let Some(backdrop) = capture_blurred_backdrop() {
+                                let size = [backdrop.width() as usize, backdrop.height() as usize];
+                                self.chalet_filter_backdrop_texture = Some(ui.ctx().load_texture(
+                                    "reservation-chalet-filter-backdrop",
+                                    egui::ColorImage::from_rgba_unmultiplied(size, backdrop.as_raw()),
+                                    egui::TextureOptions::LINEAR,
+                                ));
+                            }
+                        } else if response.clicked() {
+                            self.chalet_filter_backdrop_texture = None;
+                        }
+                        egui::Popup::menu(&response)
+                            .id(popup_id)
+                            .width(170.0)
+                            .style(egui::style::StyleModifier::new(|style| {
                                 style.visuals.window_fill =
-                                    Color32::from_rgba_unmultiplied(49, 30, 20, 218);
+                                    Color32::from_rgba_unmultiplied(49, 30, 20, 185);
                                 style.visuals.window_stroke =
                                     Stroke::new(1.0, Color32::from_rgba_unmultiplied(190, 120, 68, 190));
                                 style.visuals.widgets.noninteractive.bg_fill = Color32::TRANSPARENT;
                                 style.visuals.widgets.inactive.bg_fill = Color32::TRANSPARENT;
                                 style.visuals.widgets.hovered.bg_fill =
-                                    Color32::from_rgba_unmultiplied(153, 87, 38, 155);
+                                    Color32::from_rgba_unmultiplied(153, 87, 38, 190);
                                 style.visuals.widgets.active.bg_fill =
-                                    Color32::from_rgba_unmultiplied(153, 87, 38, 195);
-                                style.visuals.widgets.open.weak_bg_fill =
-                                    Color32::from_rgba_unmultiplied(153, 87, 38, 125);
+                                    Color32::from_rgba_unmultiplied(153, 87, 38, 215);
                             }))
-                            .show_ui(ui, |ui| {
-                                ui.selectable_value(
+                            .show(|popup_ui| {
+                                if let Some(texture) = &self.chalet_filter_backdrop_texture {
+                                    let viewport = popup_ui.ctx().content_rect();
+                                    popup_ui.painter().image(
+                                        texture.id(),
+                                        viewport,
+                                        Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+                                        Color32::WHITE,
+                                    );
+                                    popup_ui.painter().rect_filled(
+                                        viewport,
+                                        0.0,
+                                        Color32::from_rgba_unmultiplied(48, 29, 19, 86),
+                                    );
+                                }
+                                popup_ui.selectable_value(
                                     &mut self.calendar_chalet_filter,
                                     "Todos".to_owned(),
                                     "Todos os chalés",
                                 );
                                 for chalet in &self.preferences.chalet_names {
-                                    ui.selectable_value(
+                                    popup_ui.selectable_value(
                                         &mut self.calendar_chalet_filter,
                                         chalet.clone(),
                                         chalet,
                                     );
                                 }
                             });
+                        if !egui::Popup::is_id_open(ui.ctx(), popup_id) {
+                            self.chalet_filter_backdrop_texture = None;
+                        }
                         ui.add_space(8.0);
                         if self.icon_button(
                             ui,
@@ -4488,6 +4661,51 @@ fn reservation_toggle(ui: &mut egui::Ui, value: &mut bool, label: &str) {
     );
     response.clone().on_hover_text(label);
     ui.label(RichText::new(label).size(11.0).color(INK));
+}
+
+fn changelog_item(ui: &mut egui::Ui, text: &str) {
+    ui.horizontal_top(|ui| {
+        ui.label(RichText::new("•").size(12.0).color(ORANGE));
+        ui.label(RichText::new(text).size(11.0).color(INK));
+    });
+}
+
+fn profile_menu_item(
+    ui: &mut egui::Ui,
+    icon_set: &HashMap<Icon, TextureHandle>,
+    icon: Icon,
+    label: &str,
+    selected: bool,
+) -> bool {
+    let response = ui.add_sized(
+        Vec2::new(188.0, 38.0),
+        egui::Button::new("")
+            .fill(if selected {
+                Color32::from_rgb(73, 45, 28)
+            } else {
+                Color32::TRANSPARENT
+            })
+            .stroke(Stroke::NONE)
+            .corner_radius(7.0),
+    );
+    icons::paint_in_rect(
+        ui,
+        icon_set,
+        icon,
+        Rect::from_center_size(
+            Pos2::new(response.rect.left() + 20.0, response.rect.center().y),
+            Vec2::splat(17.0),
+        ),
+        if selected { ORANGE } else { MUTED },
+    );
+    ui.painter().text(
+        Pos2::new(response.rect.left() + 38.0, response.rect.center().y),
+        Align2::LEFT_CENTER,
+        label,
+        FontId::proportional(12.0),
+        INK,
+    );
+    response.clicked()
 }
 
 fn set_theme(ctx: &egui::Context) {

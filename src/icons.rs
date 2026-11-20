@@ -28,6 +28,10 @@ pub enum Icon {
     BrushCleaning,
     ChevronRight,
     ChevronDown,
+    Tv,
+    Sofa,
+    ReceiptText,
+    SettingsMenu,
     Maximize,
     X,
 }
@@ -99,6 +103,16 @@ pub fn load(ctx: &egui::Context) -> HashMap<Icon, TextureHandle> {
         (
             Icon::ChevronDown,
             include_str!("../assets/lucide/chevron-down.svg"),
+        ),
+        (Icon::Tv, include_str!("../assets/lucide/tv.svg")),
+        (Icon::Sofa, include_str!("../assets/lucide/sofa.svg")),
+        (
+            Icon::ReceiptText,
+            include_str!("../assets/lucide/receipt-text.svg"),
+        ),
+        (
+            Icon::SettingsMenu,
+            include_str!("../assets/lucide/settings-menu.svg"),
         ),
         (
             Icon::Maximize,
