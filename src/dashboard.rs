@@ -5773,6 +5773,63 @@ impl DashboardApp {
 
         if self.reservations_webview.is_none() && self.reservations_webview_error.is_none() {
             match wry::WebViewBuilder::new()
+                .with_initialization_script(
+                    r#"(() => {
+                      const hideScrollbars = () => {
+                        if (document.getElementById('matto-hide-scrollbars')) return;
+                        const style = document.createElement('style');
+                        style.id = 'matto-hide-scrollbars';
+                        style.textContent = `html, body, * { scrollbar-width: none !important; -ms-overflow-style: none !important; }
+                          *::-webkit-scrollbar { display: none !important; width: 0 !important; height: 0 !important; }
+                          .matto-merged-admin-bar { display: flex !important; flex-wrap: nowrap !important; align-items: center !important; justify-content: space-between !important; gap: 12px !important; box-sizing: border-box !important; width: 100% !important; min-height: 76px !important; padding: 8px 20px !important; border-bottom: 1px solid rgba(228,227,220,.2) !important; }
+                          .matto-merged-admin-title, .matto-merged-admin-tabs, .matto-merged-admin-actions { flex: 0 0 auto !important; }
+                          .matto-merged-admin-title { min-width: 205px !important; }
+                          .matto-merged-site-links { display: flex !important; flex: 1 1 auto !important; min-width: 0 !important; flex-wrap: nowrap !important; align-items: center !important; justify-content: center !important; gap: 3px !important; }
+                          .matto-merged-site-links > * { white-space: nowrap !important; }
+                          .matto-merged-admin-actions { display: flex !important; flex-wrap: nowrap !important; align-items: center !important; gap: 7px !important; }
+                          .dashboard-header.matto-merged-source { display: none !important; }
+                          @media (max-width: 1250px) { .matto-merged-admin-bar { gap: 6px !important; padding: 6px 12px !important; } .matto-merged-admin-title { min-width: 165px !important; } .matto-merged-site-links { gap: 0 !important; font-size: 11px !important; } .matto-merged-site-links > * { padding-left: 6px !important; padding-right: 6px !important; } }`;
+                        (document.head || document.documentElement).appendChild(style);
+                      };
+                      hideScrollbars();
+                      new MutationObserver(hideScrollbars).observe(document.documentElement, { childList: true, subtree: true });
+
+                      const mergeAdminBars = () => {
+                        const admin = document.querySelector('.dashboard-header');
+                        if (!admin || admin.classList.contains('matto-merged-source')) return;
+                        const parts = Array.from(admin.children);
+                        if (parts.length < 3) return;
+                        const leaf = (label) => Array.from(document.querySelectorAll('body *')).find(el =>
+                          el.children.length <= 1 && el.textContent.trim().toLocaleLowerCase() === label.toLocaleLowerCase());
+                        const exit = leaf('Sair');
+                        if (!exit) return;
+                        const minWidth = document.documentElement.clientWidth * 0.75;
+                        let topBar = exit.parentElement;
+                        while (topBar && topBar !== document.body) {
+                          const r = topBar.getBoundingClientRect();
+                          const text = topBar.innerText || '';
+                          if (r.top <= 8 && r.height >= 38 && r.height <= 100 && r.width >= minWidth && text.includes('Configurações') && text.includes('Loja da adega')) break;
+                          topBar = topBar.parentElement;
+                        }
+                        if (!topBar || topBar === document.body) return;
+                        const oldChildren = Array.from(topBar.children);
+                        const siteLinks = document.createElement('div');
+                        siteLinks.className = 'matto-merged-site-links';
+                        oldChildren.forEach(node => siteLinks.appendChild(node));
+                        const title = parts[0];
+                        const tabs = parts[1];
+                        const actions = parts[2];
+                        title.classList.add('matto-merged-admin-title');
+                        tabs.classList.add('matto-merged-admin-tabs');
+                        actions.classList.add('matto-merged-admin-actions');
+                        topBar.classList.add('matto-merged-admin-bar');
+                        topBar.replaceChildren(title, tabs, siteLinks, actions);
+                        admin.classList.add('matto-merged-source');
+                      };
+                      new MutationObserver(mergeAdminBars).observe(document.documentElement, { childList: true, subtree: true });
+                      mergeAdminBars();
+                    })();"#,
+                )
                 .with_url("https://sistema-admin-five.vercel.app")
                 .with_bounds(bounds)
                 .build_as_child(frame)

@@ -2111,7 +2111,7 @@ dependencies = [
 
 [[package]]
 name = "matto-chales-desktop"
-version = "0.1.79"
+version = "0.1.80"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
