@@ -3,7 +3,11 @@ use std::{
     fs,
     io::{Cursor, Read},
     path::PathBuf,
-    sync::mpsc::{self, Receiver, Sender},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+        mpsc::{self, Receiver, Sender},
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -345,6 +349,8 @@ pub struct DashboardApp {
     reservations_webview: Option<wry::WebView>,
     #[cfg(windows)]
     reservations_webview_error: Option<String>,
+    #[cfg(windows)]
+    return_to_launcher: Arc<AtomicBool>,
 }
 
 impl DashboardApp {
@@ -496,6 +502,8 @@ impl DashboardApp {
             reservations_webview: None,
             #[cfg(windows)]
             reservations_webview_error: None,
+            #[cfg(windows)]
+            return_to_launcher: Arc::new(AtomicBool::new(false)),
         };
         app.request_products(cc.egui_ctx.clone());
         app.request_update_check(cc.egui_ctx.clone());
@@ -5765,6 +5773,15 @@ impl DashboardApp {
     ) {
         use wry::dpi::{LogicalPosition, LogicalSize};
 
+        if self.return_to_launcher.swap(false, Ordering::AcqRel) {
+            self.section = Section::Launcher;
+            if let Some(webview) = &self.reservations_webview {
+                let _ = webview.set_visible(false);
+            }
+            root.ctx().request_repaint();
+            return;
+        }
+
         let area = root.max_rect();
         let bounds = wry::Rect {
             position: LogicalPosition::new(area.left(), area.top()).into(),
@@ -5772,7 +5789,18 @@ impl DashboardApp {
         };
 
         if self.reservations_webview.is_none() && self.reservations_webview_error.is_none() {
+            let return_to_launcher = self.return_to_launcher.clone();
+            let repaint = root.ctx().clone();
             match wry::WebViewBuilder::new()
+                .with_navigation_handler(move |url| {
+                    if url.starts_with("matto://launcher") {
+                        return_to_launcher.store(true, Ordering::Release);
+                        repaint.request_repaint();
+                        false
+                    } else {
+                        true
+                    }
+                })
                 .with_initialization_script(
                     r#"(() => {
                       const hideScrollbars = () => {
@@ -5784,10 +5812,16 @@ impl DashboardApp {
                           .matto-merged-admin-bar { display: flex !important; flex-wrap: nowrap !important; align-items: center !important; justify-content: space-between !important; gap: 12px !important; box-sizing: border-box !important; width: 100% !important; min-height: 76px !important; padding: 8px 20px !important; border-bottom: 1px solid rgba(228,227,220,.2) !important; }
                           .matto-merged-admin-title, .matto-merged-admin-tabs, .matto-merged-admin-actions { flex: 0 0 auto !important; }
                           .matto-merged-admin-title { min-width: 205px !important; }
+                          .matto-launcher-back { display: inline-flex !important; flex: 0 0 auto !important; align-items: center !important; justify-content: center !important; gap: 7px !important; height: 38px !important; padding: 0 12px !important; border: 1px solid rgba(155,190,170,.24) !important; border-radius: 12px !important; background: rgba(35,61,50,.42) !important; color: #e7f3eb !important; font: 600 12px/1 inherit !important; cursor: pointer !important; -webkit-backdrop-filter: blur(12px) saturate(145%) !important; backdrop-filter: blur(12px) saturate(145%) !important; }
+                          .matto-launcher-back:hover { background: rgba(55,91,72,.65) !important; border-color: rgba(174,218,190,.4) !important; }
+                          .matto-launcher-back svg { width: 15px !important; height: 15px !important; }
                           .matto-merged-site-links { display: flex !important; flex: 1 1 auto !important; min-width: 0 !important; flex-wrap: nowrap !important; align-items: center !important; justify-content: center !important; gap: 3px !important; }
                           .matto-merged-site-links > * { white-space: nowrap !important; }
                           .matto-merged-admin-actions { display: flex !important; flex-wrap: nowrap !important; align-items: center !important; gap: 7px !important; }
                           .dashboard-header.matto-merged-source { display: none !important; }
+                          .matto-selected-reservation-glass { position: relative !important; isolation: isolate !important; overflow: hidden !important; background: linear-gradient(140deg, rgba(29,49,40,.78), rgba(17,31,25,.68)) !important; border-color: rgba(166,205,183,.22) !important; box-shadow: inset 0 1px 0 rgba(239,255,246,.12), inset 0 -1px 0 rgba(121,172,143,.07), 0 14px 34px rgba(0,0,0,.18) !important; -webkit-backdrop-filter: blur(22px) saturate(155%) !important; backdrop-filter: blur(22px) saturate(155%) !important; }
+                          .matto-selected-reservation-glass::before { content: '' !important; position: absolute !important; inset: 0 !important; z-index: 0 !important; pointer-events: none !important; border-radius: inherit !important; background: radial-gradient(120% 95% at 0% 0%, rgba(223,255,237,.11), transparent 55%), linear-gradient(135deg, rgba(255,255,255,.045), transparent 44%, rgba(122,181,147,.035)) !important; }
+                          .matto-selected-reservation-glass > * { position: relative !important; z-index: 1 !important; }
                           @media (max-width: 1250px) { .matto-merged-admin-bar { gap: 6px !important; padding: 6px 12px !important; } .matto-merged-admin-title { min-width: 165px !important; } .matto-merged-site-links { gap: 0 !important; font-size: 11px !important; } .matto-merged-site-links > * { padding-left: 6px !important; padding-right: 6px !important; } }`;
                         (document.head || document.documentElement).appendChild(style);
                       };
@@ -5819,15 +5853,35 @@ impl DashboardApp {
                         const title = parts[0];
                         const tabs = parts[1];
                         const actions = parts[2];
+                        const back = document.createElement('button');
+                        back.type = 'button';
+                        back.className = 'matto-launcher-back';
+                        back.setAttribute('aria-label', 'Voltar para o launcher');
+                        back.title = 'Voltar para o launcher';
+                        back.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/><path d="M20 12H9"/><path d="M9 5H5v14h4"/></svg><span>Voltar</span>';
+                        back.addEventListener('click', () => { window.location.href = 'matto://launcher'; });
                         title.classList.add('matto-merged-admin-title');
                         tabs.classList.add('matto-merged-admin-tabs');
                         actions.classList.add('matto-merged-admin-actions');
                         topBar.classList.add('matto-merged-admin-bar');
-                        topBar.replaceChildren(title, tabs, siteLinks, actions);
+                        topBar.replaceChildren(back, title, tabs, siteLinks, actions);
                         admin.classList.add('matto-merged-source');
                       };
-                      new MutationObserver(mergeAdminBars).observe(document.documentElement, { childList: true, subtree: true });
+                      const applySelectedReservationGlass = () => {
+                        const heading = Array.from(document.querySelectorAll('p, h1, h2, h3, span, div')).find(el =>
+                          el.children.length <= 1 && el.textContent.trim().toLocaleUpperCase() === 'RESERVA SELECIONADA');
+                        if (!heading) return;
+                        let card = heading.closest('section');
+                        if (!card || !card.innerText.includes('Abrir detalhes da reserva')) {
+                          card = heading.parentElement;
+                          while (card && card !== document.body && !(card.innerText.includes('Abrir detalhes da reserva') && card.innerText.includes('Entrada') && card.innerText.includes('Saída'))) card = card.parentElement;
+                        }
+                        if (card && card !== document.body) card.classList.add('matto-selected-reservation-glass');
+                      };
+                      const refreshInjectedUi = () => { mergeAdminBars(); applySelectedReservationGlass(); };
+                      new MutationObserver(refreshInjectedUi).observe(document.documentElement, { childList: true, subtree: true });
                       mergeAdminBars();
+                      applySelectedReservationGlass();
                     })();"#,
                 )
                 .with_url("https://sistema-admin-five.vercel.app")
