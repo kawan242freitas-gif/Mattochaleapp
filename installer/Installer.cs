@@ -13,7 +13,7 @@ using System.Windows.Forms;
 internal static class Installer
 {
     private const string AppName = "Matto Chal\u00E9s";
-    private const string AppVersion = "0.1.78";
+    private const string AppVersion = "0.1.79";
     private static readonly string LocalAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
     private static readonly string InstallDir = Path.Combine(LocalAppData, "Programs", "Matto Chales");
     private static readonly string ConfigDir = Path.Combine(LocalAppData, "Matto Chales", "Matto Chales", "config");

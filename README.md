@@ -1,6 +1,6 @@
 # Matto Chalés para Windows (Rust nativo)
 
-Aplicativo desktop independente, com interface implementada em Rust/egui. A janela não carrega a interface do site. As APIs HTTPS da produção sincronizam produtos, pedidos, reservas e dados financeiros.
+Aplicativo desktop independente, com interface implementada em Rust/egui. A tela de Reservas incorpora o sistema administrativo do site em um WebView; as demais telas continuam nativas. As APIs HTTPS da produção sincronizam produtos, pedidos, reservas e dados financeiros.
 
 ## Dados do site
 
@@ -27,6 +27,6 @@ O launcher consulta a GitHub Release mais recente em `kawan242freitas-gif/Mattoc
 
 ## Publicar uma versão
 
-Crie e envie uma tag `vMAJOR.MINOR.PATCH` neste repositório. A Action do GitHub compila o app Windows, cria o instalador e publica a Release com `latest.json`. Exemplo de próxima versão: `v0.1.78`.
+Crie e envie uma tag `vMAJOR.MINOR.PATCH` neste repositório. A Action do GitHub compila o app Windows, cria o instalador e publica a Release com `latest.json`. Exemplo de próxima versão: `v0.1.79`.
 
 O launcher ignora releases da mesma versão ou anteriores. Não publique uma Release sem o instalador `MattoChales-Setup-X.Y.Z.exe` e o digest SHA-256 calculado pelo GitHub.

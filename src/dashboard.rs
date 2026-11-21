@@ -341,6 +341,10 @@ pub struct DashboardApp {
     downloaded_update: Option<(PathBuf, String)>,
     update_install_when_downloaded: bool,
     next_update_check: Instant,
+    #[cfg(windows)]
+    reservations_webview: Option<wry::WebView>,
+    #[cfg(windows)]
+    reservations_webview_error: Option<String>,
 }
 
 impl DashboardApp {
@@ -488,6 +492,10 @@ impl DashboardApp {
             downloaded_update: None,
             update_install_when_downloaded: true,
             next_update_check: Instant::now() + Duration::from_secs(300),
+            #[cfg(windows)]
+            reservations_webview: None,
+            #[cfg(windows)]
+            reservations_webview_error: None,
         };
         app.request_products(cc.egui_ctx.clone());
         app.request_update_check(cc.egui_ctx.clone());
@@ -5748,6 +5756,56 @@ impl DashboardApp {
         }
         ctx.request_repaint_after(self.next_profile_frame.saturating_duration_since(now));
     }
+
+    #[cfg(windows)]
+    fn show_reservas_website(
+        &mut self,
+        root: &mut egui::Ui,
+        frame: &eframe::Frame,
+    ) {
+        use wry::dpi::{LogicalPosition, LogicalSize};
+
+        let area = root.max_rect();
+        let bounds = wry::Rect {
+            position: LogicalPosition::new(area.left(), area.top()).into(),
+            size: LogicalSize::new(area.width().max(1.0), area.height().max(1.0)).into(),
+        };
+
+        if self.reservations_webview.is_none() && self.reservations_webview_error.is_none() {
+            match wry::WebViewBuilder::new()
+                .with_url("https://sistema-admin-five.vercel.app")
+                .with_bounds(bounds)
+                .build_as_child(frame)
+            {
+                Ok(webview) => self.reservations_webview = Some(webview),
+                Err(error) => {
+                    self.reservations_webview_error = Some(error.to_string());
+                }
+            }
+        }
+
+        if let Some(webview) = &self.reservations_webview {
+            if let Err(error) = webview.set_bounds(bounds) {
+                self.reservations_webview_error = Some(error.to_string());
+            }
+            let _ = webview.set_visible(true);
+        } else {
+            root.painter().rect_filled(area, 0.0, CANVAS);
+            root.vertical_centered(|ui| {
+                ui.add_space((area.height() * 0.38).max(24.0));
+                ui.heading("Não foi possível abrir o sistema de reservas");
+                ui.label(
+                    self.reservations_webview_error
+                        .as_deref()
+                        .unwrap_or("Verifique a conexão e tente novamente."),
+                );
+                if ui.button("Tentar novamente").clicked() {
+                    self.reservations_webview_error = None;
+                    ui.ctx().request_repaint();
+                }
+            });
+        }
+    }
 }
 
 impl eframe::App for DashboardApp {
@@ -5809,6 +5867,12 @@ impl eframe::App for DashboardApp {
             self.reservation_form_open || self.reservation_details_id.is_some();
         let finance_modal_open = self.movement_form_open || self.payable_form_open;
         let modal_open = reservation_modal_open || finance_modal_open;
+        #[cfg(windows)]
+        if (self.section != Section::Reservas || modal_open)
+            && let Some(webview) = &self.reservations_webview
+        {
+            let _ = webview.set_visible(false);
+        }
         if modal_open && self.modal_backdrop_texture.is_none() {
             if let Some(backdrop) = self.pending_modal_backdrop.take() {
                 let size = [backdrop.width() as usize, backdrop.height() as usize];
@@ -5851,6 +5915,16 @@ impl eframe::App for DashboardApp {
             return;
         }
         self.title_bar(root);
+        if self.section == Section::Reservas {
+            #[cfg(windows)]
+            self.show_reservas_website(root, _frame);
+            #[cfg(not(windows))]
+            egui::CentralPanel::default()
+                .frame(Frame::new().fill(CANVAS))
+                .show(root, |ui| self.show_reservas(ui));
+            self.show_update_prompt(&ctx);
+            return;
+        }
         if self.section == Section::Launcher {
             self.show_launcher(root);
             self.show_update_prompt(&ctx);
@@ -5864,7 +5938,7 @@ impl eframe::App for DashboardApp {
             )
             .show(root, |ui| match self.section {
                 Section::Launcher => {}
-                Section::Reservas => self.show_reservas(ui),
+                Section::Reservas => {},
                 Section::Financas => self.show_financas(ui),
                 Section::Adega => self.show_adega(ui, &ctx),
                 Section::Configuracoes => self.show_settings(ui, &ctx),

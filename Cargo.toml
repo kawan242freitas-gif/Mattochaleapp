@@ -1,6 +1,6 @@
 [package]
 name = "matto-chales-desktop"
-version = "0.1.78"
+version = "0.1.79"
 edition = "2024"
 description = "Aplicativo desktop nativo da Matto Chalés"
 
@@ -22,6 +22,7 @@ urlencoding = "2"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging"] }
+wry = { version = "0.57.3", default-features = false }
 
 [profile.release]
 lto = true
